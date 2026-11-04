@@ -53,8 +53,8 @@ Linux / Windows 的构建路径（Vulkan 后端）见 `engine/LINUX_WINDOWS.md`�
 
 ## 许可
 
-- 根目录 [`LICENSE`](LICENSE) 与 [`license/LICENSE`](license/LICENSE) 是同一份
-  GNU GPL v3 全文（仓库整体标注为 GPL-3.0）。仓库内不同部分许可不同，
+- 根目录 [`COPYING`](COPYING) 是 GNU GPL v3 全文（仓库整体标注为
+  GPL-3.0；`license/LICENSE` 是同一份）。仓库内不同部分许可不同，
   以本节为准。
 - **引擎代码**：GNU GPL v3 或更新版本。
   以**独立子进程**被 X3Lumina 调用（通过命令行/管道交换像素与参数），
