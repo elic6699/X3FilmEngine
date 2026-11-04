@@ -37,15 +37,23 @@ macOS（Metal）：
 ```bash
 engine/setup-libraw.sh     # LibRaw 0.22.2，pinned，落 build/deps
 engine/build.sh            # 引擎静态库 + spektrafilm.metallib + 测试驱动
+engine/build-host.sh       # spektralab-host（产物落 engine/build/）
 ```
+
+三步都要，缺任一步 `build-host.sh` 会直接报出缺哪个前置产物。宿主进程
+`spektralab-host` 的 macOS 链接命令行在 `engine/build-host.sh` 里（源文件：
+`engine/host/*.cpp` + `engine/src/io/*.cpp`；链接 `libspektrafilm_engine.a`、
+LibRaw 的 `libraw.a` 与六个系统 Framework）。它在构建体系里是独立的一步，
+因为 `build.sh` 只做引擎库与 Metal 内核，`CMakeLists.txt` 只覆盖
+Linux/Windows（Vulkan）。
 
 `engine/build.sh` 里有两条不能去掉的编译参数（`-fmetal-math-mode=safe`、
 `-fmetal-math-fp32-functions=precise`），原因见脚本头部注释。
 
-宿主进程 `spektralab-host` 的源文件与链接的库列在 `engine/host/CMakeLists.txt`
-（`main.cpp`/`image_io.cpp`/`output.cpp`/`platform.cpp`/`stb_impl.cpp`/
-`tiff_ifd.cpp`/`white_balance.cpp`，链 `spektralab_engine`、`spektralab_core`、
-`spk_image_io`、`spk_libraw`）。
+`engine/build-host.sh` 编译的源文件与 `engine/host/CMakeLists.txt`（Linux/Windows
+那条路）一致：`main.cpp`/`image_io.cpp`/`output.cpp`/`platform.cpp`/
+`stb_impl.cpp`/`tiff_ifd.cpp`/`white_balance.cpp`，另加 `src/io/` 下的
+RAW/图像读写。
 
 Linux / Windows 的构建路径（Vulkan 后端）见 `engine/LINUX_WINDOWS.md`、
 `engine/WINDOWS.md`，脚本为 `engine/build-linux.sh`、`engine/build-windows.ps1`、
