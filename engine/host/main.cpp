@@ -365,7 +365,7 @@ Json m_hello(const Request&) {
     r.set("capabilities", std::move(caps));
     Json methods = Json::array();
     for (const char* m : {"hello", "ping", "shutdown", "params_schema", "print_lut_catalog", "memory_report",
-                          "probe", "thumbnail", "open", "open_pixels", "redecode", "close", "set_params",
+                          "probe", "thumbnail", "decode_raw_frame", "open", "open_pixels", "redecode", "close", "set_params",
                           "get_params", "solve", "render",
                           "scene_latitude", "overscan_geometry", "preview_stock_lut", "cancel", "progress",
                           "export_image", "export_cube", "export_di", "write_image"})
@@ -528,6 +528,53 @@ Json m_open(const Request& q) {
                     std::to_string(d.frame.height) + " decode " + std::to_string(int(d.decode_ms)) + " ms, open " +
                     std::to_string(int(open_ms)) + " ms");
     return open_reply(*s, d, opened, open_ms);
+}
+
+// feature/generic-raw: decoder-only ingest for non-X3F camera RAW.
+//
+// The macOS app wants to run its OWN look chain (x3f_render_apply_ex16) on
+// these floats so that the six output colour spaces, the ICC tagging, the
+// film engines and every panel control keep working for generic RAW exactly
+// as they do for X3F. Creating an engine session here would bypass all of
+// that, so this method deliberately does not call need_engine()/engine_open().
+//
+// Wire contract (feature/generic-raw, additive -- no existing method changes):
+//   params: { "path": <utf8>, "decode": { "raw_mode": "compatible16"|"headroom" } }
+//   result: width, height, kind, format="rgb_f32le",
+//           color_space="linear_prophoto", orientation_applied=true,
+//           metadata, timings_ms
+//   payload: tightly packed little-endian float32 RGB, top row first,
+//            w*h*3 floats. LibRaw has already applied the EXIF rotation and
+//            produced linear ProPhoto (output_color=4). No clipping beyond
+//            what the selected decode policy itself does, and no 16-bit
+//            quantisation on the way out -- headroom negatives / >1 survive.
+Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
+    const fs::path path = utf8_path(require_string(q.params, "path"));
+    const DecodeOptions options = decode_options(q.params.at("decode"));
+    Decoded d = decode_frame(path, options);
+    if (d.probe.kind != FileKind::Raw)
+        throw HostError{"unsupported", "decode_raw_frame: only camera RAW files are supported"};
+    const size_t bytes = d.frame.rgb.size() * sizeof(float);
+    if (bytes == 0 || bytes > 0xffffffffu)
+        throw HostError{"decode_failed", "decode_raw_frame: empty or oversized frame"};
+    payload.resize(bytes);
+    std::memcpy(payload.data(), d.frame.rgb.data(), bytes);
+    Json r = Json::object();
+    r.set("width", number(d.frame.width));
+    r.set("height", number(d.frame.height));
+    r.set("kind", str(kind_name(d.probe.kind)));
+    r.set("format", str("rgb_f32le"));
+    r.set("color_space", str("linear_prophoto"));
+    r.set("orientation_applied", Json(true));
+    r.set("decode_mode", str(options.raw_mode));
+    r.set("metadata", metadata_json(d.probe.metadata));
+    Json timings = Json::object();
+    timings.set("decode", number(d.decode_ms));
+    r.set("timings_ms", std::move(timings));
+    log_line(1, "decode_raw_frame " + path_utf8(path) + " " +
+                    std::to_string(d.frame.width) + "x" + std::to_string(d.frame.height) +
+                    " " + std::to_string(int(d.decode_ms)) + " ms");
+    return r;
 }
 
 // P2 (X3Lumina): in-memory ingest. The caller sends linear ProPhoto as 16-bit
@@ -965,6 +1012,7 @@ void dispatch(const Request& q) {
     else if (m == "memory_report") result = m_memory_report(q);
     else if (m == "probe") result = m_probe(q);
     else if (m == "thumbnail") result = m_thumbnail(q, payload);
+    else if (m == "decode_raw_frame") result = m_decode_raw_frame(q, payload);
     else if (m == "open") result = m_open(q);
     else if (m == "open_pixels") result = m_open_pixels(q);
     else if (m == "close") result = m_close(q);
