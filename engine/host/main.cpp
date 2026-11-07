@@ -551,17 +551,34 @@ Json m_open(const Request& q) {
 Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
     const fs::path path = utf8_path(require_string(q.params, "path"));
     const DecodeOptions options = decode_options(q.params.at("decode"));
+    // feature/generic-raw (S3): a caller that only needs a preview can ask for a
+    // frame that is already downscaled. Doing the resize here — before the pipe —
+    // avoids shipping a 100 MP float frame to the app just to discard most of it.
+    // This is a TOP-LEVEL param on purpose: decode_options() rejects unknown
+    // keys inside `decode` by design.
+    const uint32_t long_edge = uint32_t(std::max(0, q.params.at("long_edge").as_int(0)));
     Decoded d = decode_frame(path, options);
     if (d.probe.kind != FileKind::Raw)
         throw HostError{"unsupported", "decode_raw_frame: only camera RAW files are supported"};
-    const size_t bytes = d.frame.rgb.size() * sizeof(float);
+    uint32_t w = d.frame.width, h = d.frame.height;
+    const float* src = d.frame.rgb.data();
+    std::vector<float> small;
+    if (long_edge > 0 && std::max(w, h) > long_edge) {
+        const double k = double(long_edge) / double(std::max(w, h));
+        const uint32_t dw = std::max(1u, uint32_t(std::lround(w * k)));
+        const uint32_t dh = std::max(1u, uint32_t(std::lround(h * k)));
+        resize_area(src, w, h, 3, dw, dh, small);
+        w = dw; h = dh; src = small.data();
+    }
+    const size_t bytes = size_t(w) * h * 3 * sizeof(float);
     if (bytes == 0 || bytes > 0xffffffffu)
         throw HostError{"decode_failed", "decode_raw_frame: empty or oversized frame"};
     payload.resize(bytes);
-    std::memcpy(payload.data(), d.frame.rgb.data(), bytes);
+    std::memcpy(payload.data(), src, bytes);
     Json r = Json::object();
-    r.set("width", number(d.frame.width));
-    r.set("height", number(d.frame.height));
+    r.set("width", number(w));
+    r.set("height", number(h));
+    r.set("long_edge_applied", Json(long_edge > 0));
     r.set("kind", str(kind_name(d.probe.kind)));
     r.set("format", str("rgb_f32le"));
     r.set("color_space", str("linear_prophoto"));
