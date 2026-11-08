@@ -2202,6 +2202,26 @@ std::string Pipeline::overscan_geometry_json() const {
                   L.perf_pitch > 0.0 ? "true" : "false",
                   L.perf_pitch, L.perf_phase, L.perf_edge, L.perf_w, L.perf_h, L.perf_r);
     s += buf;
+    // X3Lumina (RFC-032 extension, additive only -- no rendering change):
+    // the *exact* float block the overscan kernels read. A second renderer
+    // (Fotufilm) pastes its own frame into the gate; without this it can only
+    // paste a hard quadrilateral and a 6 px fade, which squares off the gate's
+    // four individual radii, ears/shoulders/kicks and its aperture penumbra.
+    // `enum OsP` above is the single source of the indices; the Metal kernel's
+    // gate_sdf()/penumbra() are the single source of the maths. Handing over
+    // the whole block keeps them in sync as the gate family gains features.
+    {
+        std::vector<float> P;
+        overscan_params_block(P);
+        s += ",\"gate_params\":[";
+        char num[64];
+        for (size_t i = 0; i < P.size(); ++i) {
+            const double v = std::isfinite(P[i]) ? double(P[i]) : 0.0;
+            std::snprintf(num, sizeof num, "%s%.9g", i ? "," : "", v);
+            s += num;
+        }
+        s += "]";
+    }
     s += "}";  // close the object (the gates array is already closed above)
     return s;
 }
