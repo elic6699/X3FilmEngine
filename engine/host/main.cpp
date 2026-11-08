@@ -11,6 +11,7 @@
 // the macOS app reaches it -- the host is a client of the engine, not a
 // second implementation of any of it.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -81,6 +82,28 @@ void write_frame(const Json& header, const void* payload = nullptr, size_t paylo
     std::fflush(stdout);
 }
 
+// Same wire format as write_frame(), but the payload is copied out of `src` a
+// chunk at a time instead of being staged in a second buffer of its own size.
+// A 100 MP decode frame is 1.2 GB; `payload.resize(bytes) + memcpy` used to
+// double that for the sake of a write that happens immediately afterwards.
+void write_frame_streamed(const Json& header, const void* src, size_t payload_len) {
+    const std::string text = header.dump();
+    uint8_t prefix[8];
+    const uint32_t h = uint32_t(text.size()), p = uint32_t(payload_len);
+    for (int i = 0; i < 4; ++i) { prefix[i] = uint8_t(h >> (8 * i)); prefix[4 + i] = uint8_t(p >> (8 * i)); }
+    std::lock_guard<std::mutex> lock(g_out_mutex);
+    std::fwrite(prefix, 1, 8, stdout);
+    std::fwrite(text.data(), 1, text.size(), stdout);
+    const uint8_t* base = static_cast<const uint8_t*>(src);
+    constexpr size_t kChunk = size_t(8) << 20;
+    for (size_t off = 0; off < payload_len; off += kChunk) {
+        const size_t n = std::min(kChunk, payload_len - off);
+        if (std::fwrite(base + off, 1, n, stdout) != n) break;
+        std::fflush(stdout);   // the app is blocked reading: do not sit in our buffer
+    }
+    std::fflush(stdout);
+}
+
 bool read_exact(void* dst, size_t n) {
     uint8_t* p = static_cast<uint8_t*>(dst);
     while (n) {
@@ -112,6 +135,15 @@ void respond_ok(uint32_t id, Json result, const void* payload = nullptr, size_t 
     h.set("ok", Json(true));
     h.set("result", std::move(result));
     write_frame(h, payload, n);
+}
+
+/// respond_ok() without staging the payload: used by the float-frame decoders.
+void respond_ok_streamed(uint32_t id, Json result, const void* payload, size_t n) {
+    Json h = Json::object();
+    h.set("id", number(id));
+    h.set("ok", Json(true));
+    h.set("result", std::move(result));
+    write_frame_streamed(h, payload, n);
 }
 
 void respond_error(uint32_t id, const std::string& code, const std::string& message) {
@@ -548,7 +580,12 @@ Json m_open(const Request& q) {
 //            produced linear ProPhoto (output_color=4). No clipping beyond
 //            what the selected decode policy itself does, and no 16-bit
 //            quantisation on the way out -- headroom negatives / >1 survive.
-Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
+//
+// The frame is handed back to dispatch() as a shared_ptr so the writer can
+// stream it straight from the decoder's buffer (`frame` below). `d.frame.rgb`
+// is moved, not copied: the frame exists once, not twice plus a 1.2 GB
+// vector<uint8_t> staging copy.
+Json m_decode_raw_frame(const Request& q, std::shared_ptr<std::vector<float>>& frame) {
     const fs::path path = utf8_path(require_string(q.params, "path"));
     const DecodeOptions options = decode_options(q.params.at("decode"));
     // feature/generic-raw (S3): a caller that only needs a preview can ask for a
@@ -561,20 +598,21 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
     if (d.probe.kind != FileKind::Raw)
         throw HostError{"unsupported", "decode_raw_frame: only camera RAW files are supported"};
     uint32_t w = d.frame.width, h = d.frame.height;
-    const float* src = d.frame.rgb.data();
-    std::vector<float> small;
+    frame = std::make_shared<std::vector<float>>();
     if (long_edge > 0 && std::max(w, h) > long_edge) {
         const double k = double(long_edge) / double(std::max(w, h));
         const uint32_t dw = std::max(1u, uint32_t(std::lround(w * k)));
         const uint32_t dh = std::max(1u, uint32_t(std::lround(h * k)));
-        resize_area(src, w, h, 3, dw, dh, small);
-        w = dw; h = dh; src = small.data();
+        resize_area(d.frame.rgb.data(), w, h, 3, dw, dh, *frame);
+        w = dw; h = dh;
+    } else {
+        *frame = std::move(d.frame.rgb);
     }
     const size_t bytes = size_t(w) * h * 3 * sizeof(float);
     if (bytes == 0 || bytes > 0xffffffffu)
         throw HostError{"decode_failed", "decode_raw_frame: empty or oversized frame"};
-    payload.resize(bytes);
-    std::memcpy(payload.data(), src, bytes);
+    if (frame->size() * sizeof(float) != bytes)
+        throw HostError{"decode_failed", "decode_raw_frame: frame size mismatch"};
     Json r = Json::object();
     r.set("width", number(w));
     r.set("height", number(h));
@@ -1029,7 +1067,15 @@ void dispatch(const Request& q) {
     else if (m == "memory_report") result = m_memory_report(q);
     else if (m == "probe") result = m_probe(q);
     else if (m == "thumbnail") result = m_thumbnail(q, payload);
-    else if (m == "decode_raw_frame") result = m_decode_raw_frame(q, payload);
+    else if (m == "decode_raw_frame") {
+        // Streamed: the frame is owned here only long enough to be written out
+        // chunk by chunk, so a 100 MP decode never exists twice in this process.
+        std::shared_ptr<std::vector<float>> frame;
+        result = m_decode_raw_frame(q, frame);
+        respond_ok_streamed(q.id, std::move(result), frame->data(),
+                            frame->size() * sizeof(float));
+        return;
+    }
     else if (m == "open") result = m_open(q);
     else if (m == "open_pixels") result = m_open_pixels(q);
     else if (m == "close") result = m_close(q);
