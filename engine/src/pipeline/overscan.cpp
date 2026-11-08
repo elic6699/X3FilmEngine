@@ -2179,7 +2179,30 @@ std::string Pipeline::overscan_geometry_json() const {
         }
         s += "]";
     }
-    s += "]}";
+    s += "]";  // close the gates array before the extension fields
+    // X3Lumina (RFC-032 extension, additive only -- no rendering change):
+    // the film's own frame, so the front end can put perforation-area effects
+    // (dust, scratches, perforation leaks) on the finished canvas instead of
+    // having the engine bake them in. `affine` is film (s, t) in mm ->
+    // canvas px: x = m00*s + m01*t + tx, y = m10*s + m11*t + ty.
+    double p00x, p00y, p10x, p10y, p01x, p01y;
+    film_to_canvas_px(L, 0.0, 0.0, p00x, p00y);
+    film_to_canvas_px(L, 1.0, 0.0, p10x, p10y);
+    film_to_canvas_px(L, 0.0, 1.0, p01x, p01y);
+    std::snprintf(buf, sizeof buf,
+                  ",\"film_w\":%.6g,\"gate_t0\":%.6g,\"gate_s0\":%.6g"
+                  ",\"affine\":[%.9g,%.9g,%.9g,%.9g,%.9g,%.9g]",
+                  L.film_w, L.gate_t0, L.gate_s0,
+                  p10x - p00x, p01x - p00x, p00x,
+                  p10y - p00y, p01y - p00y, p00y);
+    s += buf;
+    std::snprintf(buf, sizeof buf,
+                  ",\"perforated\":%s,\"perf\":{\"pitch\":%.6g,\"phase\":%.6g,\"edge\":%.6g,"
+                  "\"w\":%.6g,\"h\":%.6g,\"r\":%.6g}",
+                  L.perf_pitch > 0.0 ? "true" : "false",
+                  L.perf_pitch, L.perf_phase, L.perf_edge, L.perf_w, L.perf_h, L.perf_r);
+    s += buf;
+    s += "}";  // close the object (the gates array is already closed above)
     return s;
 }
 
