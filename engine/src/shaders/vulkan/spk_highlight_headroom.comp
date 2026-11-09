@@ -1,0 +1,42 @@
+#version 450
+
+// node_headroom (pipeline.cpp): a film with no anti-halation layer halates in
+// proportion to the *scene's* light, so a digital frame's clipped highlights
+// are given back the exposure the sensor clipped off before the halation pass.
+// Port of nodes.metal's spk_highlight_headroom (body kept verbatim, held to
+// float32). Host supplies p solved from the whole-frame maximum:
+//   p = {1/clip, clip_from, clip_inv_span, headroom,
+//        1/mid-grey, floor_from, floor_inv_span}
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, std430) readonly buffer Input { float value[]; } input_data;
+layout(set = 0, binding = 1, std430) readonly buffer Parameters { float value[]; } parameters;
+layout(set = 0, binding = 2, std430) readonly buffer Count { uint value[]; } count_data;
+layout(set = 0, binding = 3, std430) writeonly buffer Output { float value[]; } output_data;
+
+// vulkan_gpu.cpp folds a dispatch past maxComputeWorkGroupCount[0] (65535 on
+// lavapipe and Intel) into rows of workgroups; this is the 1D index it means.
+uint spk_global_index() {
+    return gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x;
+}
+
+float spk_smoothstep01(float t) {
+    t = clamp(t, 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+void main() {
+    uint i = spk_global_index();
+    if (i >= count_data.value[0]) return;
+    vec3 v = vec3(input_data.value[3 * i], input_data.value[3 * i + 1], input_data.value[3 * i + 2]);
+    float m = max(v.x, max(v.y, v.z));
+    float g = 1.0;
+    if (m > 0.0) {
+        float lm = log2(m);
+        float near_clip = spk_smoothstep01((lm + log2(parameters.value[0]) - parameters.value[1]) * parameters.value[2]);
+        float over_floor = spk_smoothstep01((lm + log2(parameters.value[4]) - parameters.value[5]) * parameters.value[6]);
+        g = exp2(parameters.value[3] * near_clip * over_floor);
+    }
+    output_data.value[3 * i]     = v.x * g;
+    output_data.value[3 * i + 1] = v.y * g;
+    output_data.value[3 * i + 2] = v.z * g;
+}

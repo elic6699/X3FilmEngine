@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "encoding": "RGB16 little-endian",
+  "materials": [
+    {
+      "file": "aging-001.spkleak",
+      "sha256": "e52dba45d41dc796b337ac1b3c1124674b6706af107e403c44c59ca3f2f411c5",
+      "width": 2000,
+      "height": 1333
+    },
+    {
+      "file": "aging-002.spkleak",
+      "sha256": "6c0cf8991898afc92f0a59c688f271e0fd51641c2c6401cd79b1ca61b61ba097",
+      "width": 2000,
+      "height": 1333
+    },
+    {
+      "file": "aging-003.spkleak",
+      "sha256": "b4e36b23b539ad5533378cad782c318e421f7b39ad381775bb98bee5e130a824",
+      "width": 2000,
+      "height": 1333
+    },
+    {
+      "file": "aging-004.spkleak",
+      "sha256": "7f922c98d02bb55677e5097020125fe2054e088358616ff560552d8111d165bf",
+      "width": 2000,
+      "height": 1333
+    },
+    {
+      "file": "aging-005.spkleak",
+      "sha256": "4b86cd6c27365ab0236e45541558ee58762bc44f2786d1e4a32e7d725d2452ca",
+      "width": 2000,
+      "height": 1333
+    }
+  ]
+}

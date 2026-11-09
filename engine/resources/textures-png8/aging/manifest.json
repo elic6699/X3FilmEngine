@@ -1,0 +1,63 @@
+{
+  "version": 2,
+  "encoding": "PNG 8-bit RGB (nearest rounding), host expands v*257 to RGB16 LE",
+  "sourceFormat": "SPKL v1 (24-byte header + RGB16 LE)",
+  "metadata": "local/front duplicated as PNG tEXt chunks spk-local / spk-front",
+  "materials": [
+    {
+      "file": "aging-001.png",
+      "sha256": "c418e5f1aed3f607806cb32953af621b58fabc4c1f03087dda85c4f249584c3f",
+      "width": 2000,
+      "height": 1333,
+      "local": 1,
+      "front": 0.0,
+      "sourceFile": "aging-001.spkleak",
+      "sourceSha256": "e52dba45d41dc796b337ac1b3c1124674b6706af107e403c44c59ca3f2f411c5",
+      "encoding": "PNG 8-bit RGB (nearest; host expands v*257)"
+    },
+    {
+      "file": "aging-002.png",
+      "sha256": "5182151d5e1a8d6147b88f0586312c2e912a3dbbb2d754d176bfa8b5d24cb602",
+      "width": 2000,
+      "height": 1333,
+      "local": 1,
+      "front": 0.0,
+      "sourceFile": "aging-002.spkleak",
+      "sourceSha256": "6c0cf8991898afc92f0a59c688f271e0fd51641c2c6401cd79b1ca61b61ba097",
+      "encoding": "PNG 8-bit RGB (nearest; host expands v*257)"
+    },
+    {
+      "file": "aging-003.png",
+      "sha256": "0d228d755908d58b765bf1a2037548a958fc61c1469079ce9953991dafb30731",
+      "width": 2000,
+      "height": 1333,
+      "local": 1,
+      "front": 0.0,
+      "sourceFile": "aging-003.spkleak",
+      "sourceSha256": "b4e36b23b539ad5533378cad782c318e421f7b39ad381775bb98bee5e130a824",
+      "encoding": "PNG 8-bit RGB (nearest; host expands v*257)"
+    },
+    {
+      "file": "aging-004.png",
+      "sha256": "a69edf2364f752e3cd3e8efacc472dd6c9c91901e1b4306c69370e01e6e37e51",
+      "width": 2000,
+      "height": 1333,
+      "local": 1,
+      "front": 0.0,
+      "sourceFile": "aging-004.spkleak",
+      "sourceSha256": "7f922c98d02bb55677e5097020125fe2054e088358616ff560552d8111d165bf",
+      "encoding": "PNG 8-bit RGB (nearest; host expands v*257)"
+    },
+    {
+      "file": "aging-005.png",
+      "sha256": "4249cd92da06f72102572594ca5075f0c8a6afd2e79dd927bc52392153edcdfc",
+      "width": 2000,
+      "height": 1333,
+      "local": 1,
+      "front": 0.0,
+      "sourceFile": "aging-005.spkleak",
+      "sourceSha256": "4b86cd6c27365ab0236e45541558ee58762bc44f2786d1e4a32e7d725d2452ca",
+      "encoding": "PNG 8-bit RGB (nearest; host expands v*257)"
+    }
+  ]
+}

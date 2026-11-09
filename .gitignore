@@ -1,0 +1,4 @@
+# 构建产物（build_framematter_win.ps1 输出，可随时重编）
+build/
+*.obj
+*.spv.log

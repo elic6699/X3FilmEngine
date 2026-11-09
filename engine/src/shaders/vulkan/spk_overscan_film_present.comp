@@ -1,0 +1,417 @@
+#version 450
+
+// SPDX-FileCopyrightText: 2026 LittleSixNine
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Applies only to FrameMatter contributions; upstream notices are retained. See COPYRIGHT.txt.
+// Faithful line-by-line transcription of overscan.metal's
+// spk_overscan_film_present kernel (:598-624) and every helper it reaches.
+//
+// Transitive closure of the helpers actually used by this kernel:
+//   canvas_to_film (:48-52), hash_u/hash_f/value_noise (:54-63),
+//   sd_quad (:67-81), gate_sdf (:91-126), perf_sdf (:410-461),
+//   kHoleEdgeSigma (:471), erf_as (:474-478), film_alpha (:481-496),
+//   scratch_line (:500-509), scratch_mask (:511-538), dust_sample (:541-550),
+//   dust_mask (:552-593).
+// gate_sdf/sd_quad are not named in the kernel's listed line ranges but are
+// called by scratch_mask and dust_mask, so they are included in full.
+//
+// Metal binding 4 is a `device const uchar*` dust atlas uploaded as a raw
+// byte array. std430 has no 8-bit scalar, so it is declared as uint[] and read
+// little-endian byte-by-byte through dust_byte(); dust_sample keeps the
+// source's own / 255.0f normalisation.
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer Cmy   { float cmy[]; };
+layout(std430, binding = 1) readonly buffer Par   { float P[]; };
+layout(std430, binding = 2) readonly buffer Cnt   { uint  n[]; };
+layout(std430, binding = 3) buffer          Out   { float outp[]; };
+layout(std430, binding = 4) readonly buffer Atlas { uint atlas[]; };
+
+// vulkan_gpu.cpp folds a dispatch past maxComputeWorkGroupCount[0] (65535 on
+// lavapipe and Intel) into rows of workgroups; this is the 1D index it means.
+uint spk_global_index() {
+    return gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x;
+}
+
+const float M_PI_F = 3.141592653589793;
+
+// enum : uint { ... } (overscan.metal :17-45). Values are identical.
+const uint P_CW = 0u;
+const uint P_CH = 1u;
+const uint P_PX = 2u;
+const uint P_FW = 3u;
+const uint P_FH = 4u;
+const uint P_A00 = 5u;
+const uint P_A01 = 6u;
+const uint P_A10 = 7u;
+const uint P_A11 = 8u;
+const uint P_CS = 9u;
+const uint P_CT = 10u;
+const uint P_CU = 11u;
+const uint P_CV = 12u;
+const uint P_VERTICAL = 13u;
+const uint P_GS0 = 14u;
+const uint P_GT0 = 15u;
+const uint P_GW = 16u;
+const uint P_GH = 17u;
+const uint P_CORNER = 18u;
+const uint P_PENUMBRA = 19u;
+const uint P_WOB_A = 20u;                // 4 sides x 3 harmonics
+const uint P_WOB_PH = 32u;               // 4 sides x 3 harmonics
+const uint P_FILM_W = 44u;
+const uint P_FOG_AMP = 45u;
+const uint P_FOG_WIDTH = 46u;
+const uint P_FOG_SEED = 47u;
+const uint P_FOG_PERIOD = 48u;
+const uint P_FOG_R = 49u;
+const uint P_FOG_G = 50u;
+const uint P_FOG_B = 51u;
+const uint P_N_LEAKS = 52u;
+const uint P_PERFORATED = 83u;
+const uint P_PERF_PITCH = 84u;
+const uint P_PERF_W = 85u;
+const uint P_PERF_H = 86u;
+const uint P_PERF_EDGE = 87u;
+const uint P_PERF_R = 88u;
+const uint P_PERF_PHASE = 89u;
+const uint P_HOLE_C = 90u;
+const uint P_HOLE_M = 91u;
+const uint P_HOLE_Y = 92u;
+const uint P_FLARE_AMP = 93u;
+const uint P_FLARE_WIDTH = 94u;
+const uint P_GATE_R = 95u;               // 4 corner radii: (s-,t-), (s+,t-), (s+,t+), (s-,t+)
+const uint P_N_Q = 99u;
+const uint P_Q = 100u;                   // up to 8 x (4 vertices s,t; round; sign)
+const uint P_ROUGH_AMP = 180u;
+const uint P_ROUGH_PERIOD = 181u;
+const uint P_ROUGH_SEED = 182u;
+const uint P_HOLES_LIGHT = 183u;
+const uint P_LIGHT_R = 184u;
+const uint P_LIGHT_G = 185u;
+const uint P_LIGHT_B = 186u;
+const uint P_PERF_SEED = 187u;
+const uint P_LIGHT_FALL = 188u;
+const uint P_LIGHT_DIR = 189u;
+const uint P_WALL_T = 190u;
+const uint P_WALL_VS = 191u;
+const uint P_WALL_VT = 192u;
+const uint P_WALL_PAR = 193u;
+const uint P_BASE_R = 194u;
+const uint P_BASE_G = 195u;
+const uint P_BASE_B = 196u;
+const uint P_WALL_GLOW = 197u;
+const uint P_WALL_SCATTER = 198u;
+const uint P_CARRIER = 199u;
+const uint P_LEAKS = 200u;               // up to 12 x (s, side, amp, sigma_s, sigma_t)
+const uint P_PAIR_ADV = 260u;            // > 0: the same gate exposed again this far along
+const uint P_SCRATCH_STRENGTH = 261u;
+const uint P_SCRATCH_LONG = 262u;
+const uint P_SCRATCH_SEED = 263u;
+const uint P_SCRATCH_EDGE = 264u;
+const uint P_PERF_LEAK = 265u;
+const uint P_PERF_LEAK_SPREAD = 266u;
+const uint P_FULL_WIDTH = 267u;
+const uint P_DUST_AMOUNT = 268u;
+const uint P_DUST_SIZE = 269u;
+const uint P_DUST_STRENGTH = 270u;
+const uint P_DUST_FULL_FRAME = 271u;
+const uint P_DUST_FIBER_RATIO = 272u;
+const uint P_PERF_LEAK_STYLE = 273u;
+const uint P_PERF_LEAK_COVERAGE = 274u;
+const uint P_PERF_LEAK_SOFTNESS = 275u;
+const uint P_PERF_LEAK_SEED = 276u;
+const uint P_COUNT = 277u;
+const uint kQStride = 10u;
+
+vec2 canvas_to_film(float x, float y) {
+    const float u = (x + 0.5f) * P[P_PX] - P[P_CU];
+    const float v = (y + 0.5f) * P[P_PX] - P[P_CV];
+    return vec2(P[P_A00] * u + P[P_A01] * v + P[P_CS], P[P_A10] * u + P[P_A11] * v + P[P_CT]);
+}
+
+uint hash_u(uint x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+float hash_f(int i, uint seed) { return float(hash_u(uint(i) * 0x9E3779B9u ^ seed)) * (1.0f / 4294967295.0f); }
+float value_noise(float x, uint seed) {
+    const float i0 = floor(x), f = x - i0;
+    const float w = f * f * (3.0f - 2.0f * f);
+    return mix(hash_f(int(i0), seed), hash_f(int(i0) + 1, seed), w);
+}
+
+// (overscan.metal :158) forward declaration; defined in full below.
+float perf_sdf(vec2 st, inout uint hole);
+
+// Signed distance to a convex quad (either winding; a repeated vertex makes a
+// triangle), negative inside. The device pointer q becomes a base index qi into
+// the global P[] SSBO: q[n] -> P[qi + n].
+float sd_quad(vec2 p, uint qi) {
+    vec2 v[4] = vec2[4](vec2(P[qi + 0u], P[qi + 1u]), vec2(P[qi + 2u], P[qi + 3u]),
+                        vec2(P[qi + 4u], P[qi + 5u]), vec2(P[qi + 6u], P[qi + 7u]));
+    float d = dot(p - v[0], p - v[0]);
+    float sgn = 1.0f;
+    for (uint i = 0u, j = 3u; i < 4u; j = i, ++i) {
+        const vec2 e = v[j] - v[i], w = p - v[i];
+        const float ee = dot(e, e);
+        if (ee < 1e-12f) continue;
+        const vec2 b = w - e * clamp(dot(w, e) / ee, 0.0f, 1.0f);
+        d = min(d, dot(b, b));
+        const bool c0 = p.y >= v[i].y, c1 = p.y < v[j].y, c2 = e.x * w.y > e.y * w.x;
+        if ((c0 && c1 && c2) || (!c0 && !c1 && !c2)) sgn = -sgn;
+    }
+    return sgn * sqrt(d);
+}
+
+// The gate (RFC-032 section 29). Signed distance, negative inside, in mm.
+float gate_sdf(vec2 st) {
+    const float hw = 0.5f * P[P_GW], hh = 0.5f * P[P_GH];
+    const float ds = st.x - (P[P_GS0] + hw), dt = st.y - (P[P_GT0] + hh);
+    const float r = ds > 0.0f ? (dt > 0.0f ? P[P_GATE_R + 2u] : P[P_GATE_R + 1u])
+                              : (dt > 0.0f ? P[P_GATE_R + 3u] : P[P_GATE_R + 0u]);
+    const float qs = abs(ds) - (hw - r), qt = abs(dt) - (hh - r);
+    float d = length(max(vec2(qs, qt), 0.0f)) + min(max(qs, qt), 0.0f) - r;
+    uint side; float along, len;
+    if (qs > qt) { side = ds > 0.0f ? 1u : 3u; along = dt + hh; len = 2.0f * hh; }
+    else         { side = dt > 0.0f ? 2u : 0u; along = ds + hw; len = 2.0f * hw; }
+    const float u = clamp(along / len, 0.0f, 1.0f);
+    float w = 0.0f;
+    for (uint k = 0u; k < 3u; ++k)
+        w += P[P_WOB_A + side * 3u + k] * sin(float(k + 1u) * M_PI_F * u + P[P_WOB_PH + side * 3u + k]);
+    d -= w * sin(M_PI_F * u);
+    const uint nq = uint(P[P_N_Q]);
+    for (uint k = 0u; k < nq; ++k) {
+        const uint qi = P_Q + kQStride * k;
+        float dq;
+        if (abs(P[qi + 9u]) > 1.5f) {
+            // an ellipse: centre q[0..1], radii q[2..3]; distance scaled by the
+            // smaller radius, exact on the boundary, which is all a penumbra reads
+            const vec2 rr = max(vec2(P[qi + 2u], P[qi + 3u]), vec2(1e-4f));
+            dq = (length((st - vec2(P[qi + 0u], P[qi + 1u])) / rr) - 1.0f) * min(rr.x, rr.y);
+        } else {
+            dq = sd_quad(st, qi) - P[qi + 8u];
+        }
+        d = P[qi + 9u] > 0.0f ? min(d, dq) : max(d, -dq);
+    }
+    if (P[P_ROUGH_AMP] > 0.0f) {
+        const uint seed = uint(P[P_ROUGH_SEED]);
+        const float per = max(P[P_ROUGH_PERIOD], 1e-3f);
+        d += P[P_ROUGH_AMP] * (value_noise(st.x / per, seed) + value_noise(st.y / per, seed ^ 0x5bd1e995u) - 1.0f);
+    }
+    return d;
+}
+
+// The nearest perforation's signed distance (mm, negative inside). `hole`
+// returns the hole's own hash (row and index) for the scan's dust.
+float perf_sdf(vec2 st, inout uint hole) {
+    const float W = P[P_FILM_W];
+    const float pitch = P[P_PERF_PITCH], ph = P[P_PERF_PHASE];
+    const float k = floor((st.x - ph - 0.5f * P[P_PERF_W]) / pitch + 0.5f);
+    const bool top = st.y < 0.5f * W;
+    const uint seed = uint(P[P_PERF_SEED]);
+    hole = hash_u(uint(int(k) * 2 + (top ? 0 : 1)) * 0x9E3779B9u ^ seed);
+    const float j0 = hash_f(int(hole & 0xFFFFu), seed ^ 0x1u) - 0.5f, j1 = hash_f(int(hole & 0xFFFFu), seed ^ 0x2u) - 0.5f;
+    const float j2 = hash_f(int(hole & 0xFFFFu), seed ^ 0x3u) - 0.5f, j3 = hash_f(int(hole & 0xFFFFu), seed ^ 0x4u) - 0.5f;
+    const float j4 = hash_f(int(hole & 0xFFFFu), seed ^ 0x5u) - 0.5f;
+    const float wa = P[P_PERF_W] + 0.016f * j2, hc = P[P_PERF_H] + 0.016f * j3;
+    const float r = clamp(P[P_PERF_R] + 0.08f * j4, 0.3f, 0.6f);
+    const float sc = ph + k * pitch + 0.5f * P[P_PERF_W] + 0.020f * j0;
+    const float tc = (top ? P[P_PERF_EDGE] + 0.5f * P[P_PERF_H] : W - P[P_PERF_EDGE] - 0.5f * P[P_PERF_H]) + 0.024f * j1;
+    const vec2 q = abs(vec2(st.x - sc, st.y - tc)) - vec2(0.5f * wa - r, 0.5f * hc - r);
+    float d = length(max(q, 0.0f)) + min(max(q.x, q.y), 0.0f) - r;
+    // the punched edge: each hole's own roughness, 1-4 microns
+    const float rough = 0.001f + 0.003f * hash_f(int(hole & 0xFFFFu), seed ^ 0x6u);
+    d += rough * (value_noise(st.x / 0.05f, seed ^ 0x77u) + value_noise(st.y / 0.05f, seed ^ 0x99u) - 1.0f) * 2.0f;
+    // a burr or a chip on about one hole in four: a 20-50 micron bump on the
+    // edge, extending the hole outward at its left short-edge centre
+    if (hash_f(int(hole & 0xFFFFu), seed ^ 0x7u) < 0.25f) {
+        // The owner fixes the film leader at s-: pull contact is the left short-edge centre.
+        const vec2 pb = vec2(sc - 0.5f * wa, tc);
+        const float sig = 0.020f + 0.030f * hash_f(int(hole & 0xFFFFu), seed ^ 0x9u);
+        // Negative signed-distance displacement expands the hole into the film, towards s-.
+        const float amp = -(0.006f + 0.010f * hash_f(int(hole & 0xFFFFu), seed ^ 0xBu));
+        d += amp * exp(-dot(st - pb, st - pb) / (sig * sig));
+    }
+    // Extend the existing Gaussian burr/chip at the sprocket's pull-contact point.
+    // shortcut: dimensions are visual estimates; calibrate against measured negatives for physical claims.
+    const float wear = P[P_SCRATCH_EDGE];
+    const vec2 contact = vec2(sc - 0.5f * wa, tc);
+    const vec2 qwear = st - contact;
+    if (wear > 0.0f && abs(qwear.x) < 0.20f && abs(qwear.y) < 0.18f) {
+        const uint ws = uint(P[P_SCRATCH_SEED]) ^ hole ^ 0xD271u;
+        if (hash_f(0, ws ^ 0x7u) < 0.75f) {
+            const vec2 sig = vec2(0.025f + 0.020f * hash_f(0, ws ^ 0x8u),
+                                  0.035f + 0.040f * hash_f(0, ws ^ 0x9u));
+            const float amp = -wear * (0.015f + 0.035f * hash_f(0, ws ^ 0xBu));
+            const vec2 z = qwear / sig;
+            const float end = 1.0f - smoothstep(0.10f, 0.18f, abs(qwear.y));
+            d += amp * exp(-dot(z,z)) * end *
+                 (0.75f + 0.25f * value_noise(qwear.y / 0.012f, ws ^ 0x77u));
+        }
+    }
+    return d;
+}
+
+// How soft a perforation's edge is in a scan, as the sigma of a Gaussian edge
+// in film millimetres.
+const float kHoleEdgeSigma = 0.017f;
+
+// erf, Abramowitz and Stegun 7.1.26 (|error| < 1.5e-7).
+float erf_as(float x) {
+    const float t = 1.0f / (1.0f + 0.3275911f * abs(x));
+    const float y = 1.0f - (((((1.061405429f * t - 1.453152027f) * t) + 1.421413741f) * t - 0.284496736f) * t + 0.254829592f) * t * exp(-x * x);
+    return x < 0.0f ? -y : y;
+}
+
+// Where there is film: 1 on the strip, 0 in the perforations and past its edges.
+float film_alpha(vec2 st) {
+    const float W = P[P_FILM_W], px = P[P_PX];
+    // (with no carrier the canvas is the film's width, and the film runs on
+    // under the corners a tilted scan carries past its edge)
+    float a = P[P_CARRIER] > 1.5f ? 1.0f : clamp(min(st.y, W - st.y) / px + 0.5f, 0.0f, 1.0f);
+    if (P[P_PERFORATED] > 0.5f) {
+        uint hole;
+        // The hole's edge as the scan resolves it: the measured softness, and
+        // the pixel's own width (a one-pixel ramp is a sigma of 0.31 px), so a
+        // small render is no softer than it was and a large one no harder
+        // than film.
+        const float sigma = sqrt(kHoleEdgeSigma * kHoleEdgeSigma + 0.0961f * px * px);
+        a *= 0.5f + 0.5f * erf_as(perf_sdf(st, hole) / (1.41421356f * sigma));
+    }
+    return a;
+}
+
+// Line mask/envelope adapted from FilmDamageSimulator's line_scratch;
+// see third_party/film_damage_simulator. Geometry uses this engine's film mm.
+float scratch_line(vec2 st, vec2 center, float len, float width, float angle, uint seed) {
+    const vec2 axis = vec2(cos(angle), sin(angle));
+    const vec2 q = st - center;
+    const float along = dot(q, axis);
+    if (abs(along) >= 0.5f * len) return 0.0f;
+    const float across = dot(q, vec2(-axis.y, axis.x));
+    const float fade = smoothstep(0.0f, min(0.15f, len * 0.15f), 0.5f * len - abs(along));
+    const float envelope = smoothstep(0.25f, 0.65f, value_noise((along + len) / max(0.12f, len * 0.09f), seed));
+    return exp(-0.5f * across * across / (width * width)) * fade * envelope;
+}
+
+float scratch_mask(vec2 st) {
+    const uint seed = uint(P[P_SCRATCH_SEED]);
+    vec2 other = st; other.x -= P[P_PAIR_ADV];
+    const float gate = min(gate_sdf(st), P[P_PAIR_ADV] > 0.0f ? gate_sdf(other) : 1e6f);
+    const bool full_width = P[P_FULL_WIDTH] > 0.5f;
+    const float rebate_depth = P[P_PERF_EDGE] + P[P_PERF_H] + 0.35f;
+    if ((!full_width && gate < 0.10f) || (full_width && min(st.y, P[P_FILM_W] - st.y) > rebate_depth) ||
+        st.y <= 0.0f || st.y >= P[P_FILM_W]) return 0.0f;
+    uint hole;
+    if (perf_sdf(st, hole) < 0.07f) return 0.0f;
+    const float along_span = P[P_GW] + P[P_PAIR_ADV];
+    float mask = 0.0f;
+    // Three neighboring tracks share a band, while their starts/ends differ.
+    for (int i = 0; i < 12; ++i) {
+        if (hash_f(i, seed ^ 0x101u) >= P[P_SCRATCH_LONG]) continue;
+        const int group = i / 3;
+        const bool top = hash_f(group, seed ^ 0x202u) < 0.5f;
+        const float offset = 0.28f + 0.65f * hash_f(group, seed ^ 0x303u) + float(i % 3) * 0.07f;
+        const float band = P[P_PERF_EDGE] + P[P_PERF_H] + 0.25f - offset;
+        const float t = full_width ? (top ? band : P[P_FILM_W] - band)
+                                  : (top ? P[P_GT0] - offset : P[P_GT0] + P[P_GH] + offset);
+        const float ss = P[P_GS0] + along_span * hash_f(i, seed ^ 0x404u);
+        const float len = along_span * (0.3f + 0.8f * hash_f(i, seed ^ 0x505u));
+        const float w = sqrt(pow(0.009f + 0.0105f * hash_f(i, seed ^ 0x606u), 2.0f) + 0.0961f * P[P_PX] * P[P_PX]);
+        mask = max(mask, scratch_line(st, vec2(ss, t), len, w, 0.0f, seed ^ uint(i + 1)));
+    }
+    return mask;
+}
+
+// Approved real grayscale masks; tile order is 64 dust, 32 short, 16 long fibers.
+// The Metal `device const uchar*` is a raw byte SSBO bound as uint[]; dust_byte
+// extracts one little-endian byte from the enclosing 32-bit word. The returned
+// value is the raw 0..255 byte (Metal's float(uchar)); the / 255.0f below is
+// dust_sample's own normalisation, unchanged from the source.
+uint dust_byte(uint idx) {
+    uint w = atlas[idx >> 2u];
+    return (w >> ((idx & 3u) * 8u)) & 0xffu;
+}
+
+float dust_sample(vec2 q, uint shape) {
+    if (any(greaterThan(abs(q), vec2(1.5f)))) return 0.0f;
+    const vec2 p = (q + 1.5f) * (64.0f / 3.0f) - 0.5f;
+    const ivec2 i = ivec2(floor(p)); const vec2 f = fract(p);
+    const ivec2 a = clamp(i, ivec2(0), ivec2(63));
+    const ivec2 b = clamp(i + 1, ivec2(0), ivec2(63));
+    const uint offset = shape * 4096u;
+    return mix(mix(float(dust_byte(offset + uint(a.y * 64 + a.x))),
+                   float(dust_byte(offset + uint(a.y * 64 + b.x))), f.x),
+               mix(float(dust_byte(offset + uint(b.y * 64 + a.x))),
+                   float(dust_byte(offset + uint(b.y * 64 + b.x))), f.x), f.y) / 255.0f;
+}
+
+float dust_mask(vec2 st) {
+    if (P[P_DUST_FULL_FRAME] < 0.5f) {
+        if (P[P_FULL_WIDTH] > 0.5f) {
+            if (min(st.y, P[P_FILM_W] - st.y) > P[P_PERF_EDGE] + P[P_PERF_H] + 0.35f) return 0.0f;
+        } else {
+            vec2 other = st; other.x -= P[P_PAIR_ADV];
+            if (min(gate_sdf(st), P[P_PAIR_ADV] > 0.0f ? gate_sdf(other) : 1e6f) < 0.10f) return 0.0f;
+        }
+    }
+    const uint seed = uint(P[P_SCRATCH_SEED]) ^ 0xD057u;
+    const ivec2 cell = ivec2(floor(st));
+    float mask = 0.0f;
+    // Physical 1 mm cells keep positions stable across preview/export sizes.
+    for (int y = -2; y <= 2; ++y) for (int x = -2; x <= 2; ++x) {
+        const ivec2 id = cell + ivec2(x, y);
+        const uint h = hash_u(uint(id.x) * 0x9E3779B9u ^ uint(id.y) * 0x85EBCA6Bu ^ seed);
+        const float cluster = 0.25f + 0.75f * value_noise(float(id.x) / 5.0f, seed ^ uint(id.y / 5));
+        if (hash_f(0, h) >= 0.22f * P[P_DUST_AMOUNT] * cluster) continue;
+        const vec2 center = vec2(id) + vec2(hash_f(1, h), hash_f(2, h));
+        const bool fiber = hash_f(7, h) < P[P_DUST_FIBER_RATIO];
+        const bool long_fiber = fiber && hash_f(9, h) < 0.2f;
+        const uint shape = !fiber ? hash_u(h ^ 0x51u) % 64u
+                         : long_fiber ? 96u + hash_u(h ^ 0x52u) % 16u
+                                      : 64u + hash_u(h ^ 0x53u) % 32u;
+        const float u = hash_f(3, h);
+        const float base_radius = !fiber ? 0.014f + 0.10f * pow(u, 3.0f)
+                                : long_fiber ? 0.20f + 0.35f * u : 0.05f + 0.13f * u;
+        const float radius = base_radius * (0.4f + 1.6f * P[P_DUST_SIZE]);
+        const vec2 v = st - center;
+        if (length(v) > 2.122f * radius + P[P_PX]) continue;
+        const float angle = 6.2831853f * hash_f(4, h);
+        const vec2 q = vec2(cos(angle) * v.x + sin(angle) * v.y, -sin(angle) * v.x + cos(angle) * v.y) / radius;
+        // Pixel-footprint integration keeps thin fibers from flickering at preview scale.
+        const float aa = 0.25f * P[P_PX] / radius;
+        const float cover = 0.25f * (dust_sample(q + vec2(aa, aa), shape)
+                                  + dust_sample(q + vec2(-aa, aa), shape)
+                                  + dust_sample(q + vec2(aa, -aa), shape)
+                                  + dust_sample(q - vec2(aa, aa), shape));
+        mask = max(mask, cover * (0.5f + 0.45f * hash_f(5, h)));
+    }
+    return mask;
+}
+
+// (4): where there is no film -- the perforations, and outside the strip --
+// the negative's density goes to the cmy that cancels this film's base, so
+// the enlarger or the scanner sees clear light.
+void main() {
+    uint i = spk_global_index();
+    if (i >= n[0]) return;
+    const uint cw = uint(P[P_CW]);
+    const float a = film_alpha(canvas_to_film(float(i % cw), float(i / cw)));
+    vec3 c = vec3(cmy[3u * i], cmy[3u * i + 1u], cmy[3u * i + 2u]);
+    if (P[P_SCRATCH_STRENGTH] > 0.0f && P[P_PERFORATED] > 0.5f && a > 0.999f) {
+        // shortcut: neutral density approximates scratch obstruction; calibrate against measured wear before claiming a physical model.
+        const float wear = scratch_mask(canvas_to_film(float(i % cw), float(i / cw)));
+        c += 0.90f * P[P_SCRATCH_STRENGTH] * wear;
+    }
+    if (P[P_DUST_AMOUNT] > 0.0f && P[P_DUST_STRENGTH] > 0.0f && a > 0.999f) {
+        const float cover = dust_mask(canvas_to_film(float(i % cw), float(i / cw)));
+        // shortcut: neutral CMY attenuation reuses the negative/print path; not calibrated scanner spectral dust.
+        // GLSL has no log10; the project's convention (spk_log10_guarded.comp)
+        // is log(x) * 0.4342944819032518 == log10(x).
+        c += -log(max(1.0f - 0.98f * P[P_DUST_STRENGTH] * cover, 0.02f)) * 0.4342944819032518;
+    }
+    const vec3 hole = vec3(P[P_HOLE_C], P[P_HOLE_M], P[P_HOLE_Y]);
+    const vec3 r3 = a * c + (1.0f - a) * hole;
+    outp[3u * i] = r3.x;
+    outp[3u * i + 1u] = r3.y;
+    outp[3u * i + 2u] = r3.z;
+}

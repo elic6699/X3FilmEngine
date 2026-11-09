@@ -1,0 +1,29 @@
+PhotoTrail — metadata code provenance and additional licence grant
+=================================================================
+
+Copyright (C) 2026 LittleSixNine.
+Source project: https://github.com/LittleSixNine/PhotoTrail
+
+Selected original metadata-handling code in FrameMatter is adapted from
+PhotoTrail, developed by LittleSixNine. The copyright holder has authorized
+this reused original code, including its adaptations in FrameMatter, under
+the GNU General Public License version 3 or any later version
+(SPDX: GPL-3.0-or-later). The full licence is in FrameMatter-GPL-3.0.txt.
+
+This additional grant applies to the copyright holder's original code reused
+in FrameMatter. It does not change the licence of the PhotoTrail project,
+which retains its own independent licence. See PhotoTrail's LICENSE:
+https://github.com/LittleSixNine/PhotoTrail/blob/main/LICENSE
+
+No copyright or relicensing authority over GeoTag, ExifTool or any other
+third-party work is claimed by this notice. Any third-party material retains
+its applicable copyright and licence notices. This is a source attribution
+and scoped grant, not a claim that FrameMatter includes all of PhotoTrail or
+its dependencies.
+
+中文说明
+--------
+FrameMatter 的部分元数据处理代码改编自 LittleSixNine 开发的 PhotoTrail。
+经版权人另行授权，本项目复用的相关原创代码及其在 FrameMatter 中的修改
+按 GNU GPL v3 或后续版本提供。PhotoTrail 项目本身继续适用其独立许可。
+此授权仅涵盖版权人有权授权的原创代码，不改变第三方代码的权属与许可。

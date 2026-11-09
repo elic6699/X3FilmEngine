@@ -1,0 +1,2360 @@
+{
+  "license": "CC BY 4.0",
+  "creator": "Daniela Ivanova",
+  "source": "https://doi.org/10.6084/m9.figshare.21803292",
+  "changes": "Cropped grayscale masks; local median background removal; MAD noise floor 2 sigma for dust, 1.5 for fibers; P99 peak normalization and .65 source pixel contour feather; original aspect retained. Previous P01-P16 use 2 sigma.",
+  "assets": [
+    {
+      "id": "P01",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "15",
+      "file": "P01-scan10-ann15.png",
+      "bbox": [
+        1437,
+        2733,
+        1457,
+        2753
+      ],
+      "center": [
+        1447.5,
+        2743.5
+      ],
+      "annotation_span": [
+        12.0,
+        12.0
+      ]
+    },
+    {
+      "id": "P02",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "16",
+      "file": "P02-scan10-ann16.png",
+      "bbox": [
+        4583,
+        2130,
+        4619,
+        2166
+      ],
+      "center": [
+        4601.25,
+        2148.75
+      ],
+      "annotation_span": [
+        22.5,
+        13.5
+      ]
+    },
+    {
+      "id": "P03",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "18",
+      "file": "P03-scan10-ann18.png",
+      "bbox": [
+        4829,
+        2045,
+        4856,
+        2072
+      ],
+      "center": [
+        4842.75,
+        2058.75
+      ],
+      "annotation_span": [
+        16.5,
+        13.5
+      ]
+    },
+    {
+      "id": "P04",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "19",
+      "file": "P04-scan10-ann19.png",
+      "bbox": [
+        2625,
+        1486,
+        2650,
+        1511
+      ],
+      "center": [
+        2637.75,
+        1498.5
+      ],
+      "annotation_span": [
+        13.5,
+        15.0
+      ]
+    },
+    {
+      "id": "P05",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "20",
+      "file": "P05-scan10-ann20.png",
+      "bbox": [
+        2519,
+        518,
+        2542,
+        541
+      ],
+      "center": [
+        2531.25,
+        530.25
+      ],
+      "annotation_span": [
+        13.5,
+        10.5
+      ]
+    },
+    {
+      "id": "P06",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "21",
+      "file": "P06-scan10-ann21.png",
+      "bbox": [
+        3752,
+        694,
+        3775,
+        717
+      ],
+      "center": [
+        3764.25,
+        705.75
+      ],
+      "annotation_span": [
+        10.5,
+        13.5
+      ]
+    },
+    {
+      "id": "P07",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "22",
+      "file": "P07-scan10-ann22.png",
+      "bbox": [
+        2092,
+        318,
+        2115,
+        341
+      ],
+      "center": [
+        2103.75,
+        330.0
+      ],
+      "annotation_span": [
+        13.5,
+        12.0
+      ]
+    },
+    {
+      "id": "P08",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "24",
+      "file": "P08-scan10-ann24.png",
+      "bbox": [
+        359,
+        136,
+        400,
+        177
+      ],
+      "center": [
+        380.25,
+        156.75
+      ],
+      "annotation_span": [
+        25.5,
+        19.5
+      ]
+    },
+    {
+      "id": "P09",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "25",
+      "file": "P09-scan10-ann25.png",
+      "bbox": [
+        1445,
+        130,
+        1499,
+        184
+      ],
+      "center": [
+        1472.25,
+        157.5
+      ],
+      "annotation_span": [
+        34.5,
+        15.0
+      ]
+    },
+    {
+      "id": "P10",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "26",
+      "file": "P10-scan10-ann26.png",
+      "bbox": [
+        335,
+        151,
+        358,
+        174
+      ],
+      "center": [
+        347.25,
+        162.75
+      ],
+      "annotation_span": [
+        13.5,
+        10.5
+      ]
+    },
+    {
+      "id": "P11",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "27",
+      "file": "P11-scan10-ann27.png",
+      "bbox": [
+        4565,
+        41,
+        4583,
+        59
+      ],
+      "center": [
+        4574.25,
+        50.25
+      ],
+      "annotation_span": [
+        10.5,
+        10.5
+      ]
+    },
+    {
+      "id": "P12",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "28",
+      "file": "P12-scan10-ann28.png",
+      "bbox": [
+        4561,
+        73,
+        4586,
+        98
+      ],
+      "center": [
+        4574.25,
+        85.5
+      ],
+      "annotation_span": [
+        10.5,
+        15.0
+      ]
+    },
+    {
+      "id": "P13",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "29",
+      "file": "P13-scan10-ann29.png",
+      "bbox": [
+        4516,
+        75,
+        4554,
+        113
+      ],
+      "center": [
+        4535.25,
+        94.5
+      ],
+      "annotation_span": [
+        19.5,
+        24.0
+      ]
+    },
+    {
+      "id": "P14",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "30",
+      "file": "P14-scan10-ann30.png",
+      "bbox": [
+        3953,
+        14,
+        3971,
+        32
+      ],
+      "center": [
+        3962.25,
+        23.25
+      ],
+      "annotation_span": [
+        10.5,
+        10.5
+      ]
+    },
+    {
+      "id": "P15",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "31",
+      "file": "P15-scan10-ann31.png",
+      "bbox": [
+        2594,
+        20,
+        2617,
+        43
+      ],
+      "center": [
+        2605.5,
+        32.25
+      ],
+      "annotation_span": [
+        12.0,
+        13.5
+      ]
+    },
+    {
+      "id": "P16",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "32",
+      "file": "P16-scan10-ann32.png",
+      "bbox": [
+        4484,
+        34,
+        4516,
+        66
+      ],
+      "center": [
+        4500.75,
+        50.25
+      ],
+      "annotation_span": [
+        19.5,
+        19.5
+      ]
+    },
+    {
+      "id": "D01",
+      "category": "Dust",
+      "scan": 1,
+      "annotation": "552",
+      "bbox": [
+        3711,
+        873,
+        3727,
+        890
+      ],
+      "center": [
+        3718.5,
+        881.0
+      ],
+      "annotation_span": [
+        7.0,
+        8.0
+      ],
+      "file": "D01-scan1-ann552.png"
+    },
+    {
+      "id": "D02",
+      "category": "Dust",
+      "scan": 4,
+      "annotation": "143",
+      "bbox": [
+        4283,
+        2631,
+        4302,
+        2648
+      ],
+      "center": [
+        4292.0,
+        2639.0
+      ],
+      "annotation_span": [
+        10.0,
+        8.0
+      ],
+      "file": "D02-scan4-ann143.png"
+    },
+    {
+      "id": "D03",
+      "category": "Dust",
+      "scan": 8,
+      "annotation": "112",
+      "bbox": [
+        4809,
+        1667,
+        4831,
+        1688
+      ],
+      "center": [
+        4819.5,
+        1677.0
+      ],
+      "annotation_span": [
+        12.0,
+        12.0
+      ],
+      "file": "D03-scan8-ann112.png"
+    },
+    {
+      "id": "D04",
+      "category": "Dust",
+      "scan": 9,
+      "annotation": "416",
+      "bbox": [
+        686,
+        1053,
+        707,
+        1073
+      ],
+      "center": [
+        696.0,
+        1062.75
+      ],
+      "annotation_span": [
+        12.0,
+        10.5
+      ],
+      "file": "D04-scan9-ann416.png"
+    },
+    {
+      "id": "D05",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "5",
+      "bbox": [
+        3386,
+        1184,
+        3407,
+        1199
+      ],
+      "center": [
+        3396.0,
+        1191.0
+      ],
+      "annotation_span": [
+        12.0,
+        6.0
+      ],
+      "file": "D05-scan10-ann5.png"
+    },
+    {
+      "id": "D06",
+      "category": "Dust",
+      "scan": 1,
+      "annotation": "397",
+      "bbox": [
+        4348,
+        1364,
+        4372,
+        1382
+      ],
+      "center": [
+        4359.5,
+        1372.5
+      ],
+      "annotation_span": [
+        15.0,
+        9.0
+      ],
+      "file": "D06-scan1-ann397.png"
+    },
+    {
+      "id": "D07",
+      "category": "Dust",
+      "scan": 4,
+      "annotation": "256",
+      "bbox": [
+        4597,
+        1874,
+        4619,
+        1891
+      ],
+      "center": [
+        4607.5,
+        1882.0
+      ],
+      "annotation_span": [
+        13.0,
+        8.0
+      ],
+      "file": "D07-scan4-ann256.png"
+    },
+    {
+      "id": "D08",
+      "category": "Dust",
+      "scan": 8,
+      "annotation": "194",
+      "bbox": [
+        4458,
+        602,
+        4480,
+        628
+      ],
+      "center": [
+        4468.5,
+        614.25
+      ],
+      "annotation_span": [
+        12.0,
+        16.5
+      ],
+      "file": "D08-scan8-ann194.png"
+    },
+    {
+      "id": "D09",
+      "category": "Dust",
+      "scan": 9,
+      "annotation": "265",
+      "bbox": [
+        3623,
+        2099,
+        3650,
+        2123
+      ],
+      "center": [
+        3636.0,
+        2110.5
+      ],
+      "annotation_span": [
+        18.0,
+        15.0
+      ],
+      "file": "D09-scan9-ann265.png"
+    },
+    {
+      "id": "D10",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "4",
+      "bbox": [
+        3450,
+        1161,
+        3478,
+        1183
+      ],
+      "center": [
+        3463.5,
+        1171.5
+      ],
+      "annotation_span": [
+        18.0,
+        12.0
+      ],
+      "file": "D10-scan10-ann4.png"
+    },
+    {
+      "id": "D11",
+      "category": "Dust",
+      "scan": 1,
+      "annotation": "821",
+      "bbox": [
+        3969,
+        100,
+        3994,
+        124
+      ],
+      "center": [
+        3981.0,
+        111.5
+      ],
+      "annotation_span": [
+        16.0,
+        15.0
+      ],
+      "file": "D11-scan1-ann821.png"
+    },
+    {
+      "id": "D12",
+      "category": "Dust",
+      "scan": 4,
+      "annotation": "216",
+      "bbox": [
+        3245,
+        2445,
+        3273,
+        2466
+      ],
+      "center": [
+        3258.5,
+        2455.0
+      ],
+      "annotation_span": [
+        19.0,
+        12.0
+      ],
+      "file": "D12-scan4-ann216.png"
+    },
+    {
+      "id": "D13",
+      "category": "Dust",
+      "scan": 8,
+      "annotation": "28",
+      "bbox": [
+        3320,
+        2471,
+        3340,
+        2500
+      ],
+      "center": [
+        3329.25,
+        2484.75
+      ],
+      "annotation_span": [
+        10.5,
+        19.5
+      ],
+      "file": "D13-scan8-ann28.png"
+    },
+    {
+      "id": "D14",
+      "category": "Dust",
+      "scan": 9,
+      "annotation": "74",
+      "bbox": [
+        2597,
+        3033,
+        2626,
+        3053
+      ],
+      "center": [
+        2610.75,
+        3042.75
+      ],
+      "annotation_span": [
+        19.5,
+        10.5
+      ],
+      "file": "D14-scan9-ann74.png"
+    },
+    {
+      "id": "D15",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "17",
+      "bbox": [
+        2192,
+        2024,
+        2212,
+        2044
+      ],
+      "center": [
+        2201.25,
+        2033.25
+      ],
+      "annotation_span": [
+        10.5,
+        10.5
+      ],
+      "file": "D15-scan10-ann17.png"
+    },
+    {
+      "id": "D16",
+      "category": "Dust",
+      "scan": 1,
+      "annotation": "853",
+      "bbox": [
+        2650,
+        50,
+        2670,
+        80
+      ],
+      "center": [
+        2659.5,
+        64.5
+      ],
+      "annotation_span": [
+        11.0,
+        21.0
+      ],
+      "file": "D16-scan1-ann853.png"
+    },
+    {
+      "id": "D17",
+      "category": "Dust",
+      "scan": 4,
+      "annotation": "195",
+      "bbox": [
+        420,
+        3193,
+        438,
+        3218
+      ],
+      "center": [
+        428.5,
+        3205.0
+      ],
+      "annotation_span": [
+        9.0,
+        16.0
+      ],
+      "file": "D17-scan4-ann195.png"
+    },
+    {
+      "id": "D18",
+      "category": "Dust",
+      "scan": 8,
+      "annotation": "17",
+      "bbox": [
+        2288,
+        2643,
+        2309,
+        2663
+      ],
+      "center": [
+        2298.0,
+        2652.75
+      ],
+      "annotation_span": [
+        12.0,
+        10.5
+      ],
+      "file": "D18-scan8-ann17.png"
+    },
+    {
+      "id": "D19",
+      "category": "Dust",
+      "scan": 9,
+      "annotation": "354",
+      "bbox": [
+        2102,
+        348,
+        2125,
+        370
+      ],
+      "center": [
+        2112.75,
+        358.5
+      ],
+      "annotation_span": [
+        13.5,
+        12.0
+      ],
+      "file": "D19-scan9-ann354.png"
+    },
+    {
+      "id": "D20",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "9",
+      "bbox": [
+        1803,
+        1833,
+        1822,
+        1850
+      ],
+      "center": [
+        1812.0,
+        1841.25
+      ],
+      "annotation_span": [
+        9.0,
+        7.5
+      ],
+      "file": "D20-scan10-ann9.png"
+    },
+    {
+      "id": "D21",
+      "category": "Dust",
+      "scan": 1,
+      "annotation": "849",
+      "bbox": [
+        1219,
+        366,
+        1243,
+        407
+      ],
+      "center": [
+        1230.5,
+        386.0
+      ],
+      "annotation_span": [
+        15.0,
+        32.0
+      ],
+      "file": "D21-scan1-ann849.png"
+    },
+    {
+      "id": "D22",
+      "category": "Dust",
+      "scan": 4,
+      "annotation": "131",
+      "bbox": [
+        4206,
+        2696,
+        4222,
+        2714
+      ],
+      "center": [
+        4213.5,
+        2704.5
+      ],
+      "annotation_span": [
+        7.0,
+        9.0
+      ],
+      "file": "D22-scan4-ann131.png"
+    },
+    {
+      "id": "D23",
+      "category": "Dust",
+      "scan": 8,
+      "annotation": "206",
+      "bbox": [
+        3833,
+        1403,
+        3859,
+        1430
+      ],
+      "center": [
+        3845.25,
+        1416.0
+      ],
+      "annotation_span": [
+        16.5,
+        18.0
+      ],
+      "file": "D23-scan8-ann206.png"
+    },
+    {
+      "id": "D24",
+      "category": "Dust",
+      "scan": 9,
+      "annotation": "525",
+      "bbox": [
+        4550,
+        1488,
+        4576,
+        1516
+      ],
+      "center": [
+        4562.25,
+        1501.5
+      ],
+      "annotation_span": [
+        16.5,
+        18.0
+      ],
+      "file": "D24-scan9-ann525.png"
+    },
+    {
+      "id": "D25",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "8",
+      "bbox": [
+        1454,
+        1715,
+        1480,
+        1736
+      ],
+      "center": [
+        1466.25,
+        1725.0
+      ],
+      "annotation_span": [
+        16.5,
+        12.0
+      ],
+      "file": "D25-scan10-ann8.png"
+    },
+    {
+      "id": "D26",
+      "category": "Dust",
+      "scan": 1,
+      "annotation": "212",
+      "bbox": [
+        4213,
+        2431,
+        4230,
+        2449
+      ],
+      "center": [
+        4221.0,
+        2439.5
+      ],
+      "annotation_span": [
+        8.0,
+        9.0
+      ],
+      "file": "D26-scan1-ann212.png"
+    },
+    {
+      "id": "D27",
+      "category": "Dust",
+      "scan": 4,
+      "annotation": "224",
+      "bbox": [
+        1967,
+        1994,
+        1990,
+        2010
+      ],
+      "center": [
+        1978.0,
+        2001.5
+      ],
+      "annotation_span": [
+        14.0,
+        7.0
+      ],
+      "file": "D27-scan4-ann224.png"
+    },
+    {
+      "id": "D28",
+      "category": "Dust",
+      "scan": 8,
+      "annotation": "80",
+      "bbox": [
+        3029,
+        3033,
+        3058,
+        3055
+      ],
+      "center": [
+        3042.75,
+        3043.5
+      ],
+      "annotation_span": [
+        19.5,
+        12.0
+      ],
+      "file": "D28-scan8-ann80.png"
+    },
+    {
+      "id": "D29",
+      "category": "Dust",
+      "scan": 9,
+      "annotation": "152",
+      "bbox": [
+        614,
+        3107,
+        634,
+        3136
+      ],
+      "center": [
+        623.25,
+        3120.75
+      ],
+      "annotation_span": [
+        10.5,
+        19.5
+      ],
+      "file": "D29-scan9-ann152.png"
+    },
+    {
+      "id": "D30",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "1",
+      "bbox": [
+        4277,
+        1164,
+        4301,
+        1186
+      ],
+      "center": [
+        4288.5,
+        1174.5
+      ],
+      "annotation_span": [
+        15.0,
+        12.0
+      ],
+      "file": "D30-scan10-ann1.png"
+    },
+    {
+      "id": "D31",
+      "category": "Dust",
+      "scan": 1,
+      "annotation": "474",
+      "bbox": [
+        1487,
+        1608,
+        1503,
+        1629
+      ],
+      "center": [
+        1494.5,
+        1618.0
+      ],
+      "annotation_span": [
+        7.0,
+        12.0
+      ],
+      "file": "D31-scan1-ann474.png"
+    },
+    {
+      "id": "D32",
+      "category": "Dust",
+      "scan": 4,
+      "annotation": "164",
+      "bbox": [
+        2232,
+        2551,
+        2256,
+        2576
+      ],
+      "center": [
+        2243.5,
+        2563.0
+      ],
+      "annotation_span": [
+        15.0,
+        16.0
+      ],
+      "file": "D32-scan4-ann164.png"
+    },
+    {
+      "id": "D33",
+      "category": "Dust",
+      "scan": 8,
+      "annotation": "196",
+      "bbox": [
+        468,
+        570,
+        488,
+        590
+      ],
+      "center": [
+        477.75,
+        579.75
+      ],
+      "annotation_span": [
+        10.5,
+        10.5
+      ],
+      "file": "D33-scan8-ann196.png"
+    },
+    {
+      "id": "D34",
+      "category": "Dust",
+      "scan": 9,
+      "annotation": "514",
+      "bbox": [
+        440,
+        1602,
+        461,
+        1622
+      ],
+      "center": [
+        450.0,
+        1611.75
+      ],
+      "annotation_span": [
+        12.0,
+        10.5
+      ],
+      "file": "D34-scan9-ann514.png"
+    },
+    {
+      "id": "D35",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "2",
+      "bbox": [
+        4277,
+        2861,
+        4298,
+        2879
+      ],
+      "center": [
+        4287.0,
+        2869.5
+      ],
+      "annotation_span": [
+        12.0,
+        9.0
+      ],
+      "file": "D35-scan10-ann2.png"
+    },
+    {
+      "id": "D36",
+      "category": "Dust",
+      "scan": 1,
+      "annotation": "441",
+      "bbox": [
+        2318,
+        1122,
+        2343,
+        1149
+      ],
+      "center": [
+        2330.0,
+        1135.0
+      ],
+      "annotation_span": [
+        16.0,
+        18.0
+      ],
+      "file": "D36-scan1-ann441.png"
+    },
+    {
+      "id": "D37",
+      "category": "Dust",
+      "scan": 4,
+      "annotation": "304",
+      "bbox": [
+        3156,
+        2779,
+        3176,
+        2796
+      ],
+      "center": [
+        3165.5,
+        2787.0
+      ],
+      "annotation_span": [
+        11.0,
+        8.0
+      ],
+      "file": "D37-scan4-ann304.png"
+    },
+    {
+      "id": "D38",
+      "category": "Dust",
+      "scan": 8,
+      "annotation": "184",
+      "bbox": [
+        4103,
+        786,
+        4133,
+        815
+      ],
+      "center": [
+        4117.5,
+        800.25
+      ],
+      "annotation_span": [
+        21.0,
+        19.5
+      ],
+      "file": "D38-scan8-ann184.png"
+    },
+    {
+      "id": "D39",
+      "category": "Dust",
+      "scan": 9,
+      "annotation": "437",
+      "bbox": [
+        2201,
+        216,
+        2239,
+        244
+      ],
+      "center": [
+        2219.25,
+        229.5
+      ],
+      "annotation_span": [
+        28.5,
+        18.0
+      ],
+      "file": "D39-scan9-ann437.png"
+    },
+    {
+      "id": "D40",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "6",
+      "bbox": [
+        1724,
+        1344,
+        1750,
+        1364
+      ],
+      "center": [
+        1736.25,
+        1353.75
+      ],
+      "annotation_span": [
+        16.5,
+        10.5
+      ],
+      "file": "D40-scan10-ann6.png"
+    },
+    {
+      "id": "D41",
+      "category": "Dust",
+      "scan": 1,
+      "annotation": "859",
+      "bbox": [
+        251,
+        33,
+        280,
+        53
+      ],
+      "center": [
+        265.0,
+        42.5
+      ],
+      "annotation_span": [
+        20.0,
+        11.0
+      ],
+      "file": "D41-scan1-ann859.png"
+    },
+    {
+      "id": "D42",
+      "category": "Dust",
+      "scan": 4,
+      "annotation": "426",
+      "bbox": [
+        2299,
+        2083,
+        2321,
+        2100
+      ],
+      "center": [
+        2309.5,
+        2091.0
+      ],
+      "annotation_span": [
+        13.0,
+        8.0
+      ],
+      "file": "D42-scan4-ann426.png"
+    },
+    {
+      "id": "D43",
+      "category": "Dust",
+      "scan": 8,
+      "annotation": "134",
+      "bbox": [
+        3792,
+        3333,
+        3823,
+        3355
+      ],
+      "center": [
+        3807.0,
+        3343.5
+      ],
+      "annotation_span": [
+        21.0,
+        12.0
+      ],
+      "file": "D43-scan8-ann134.png"
+    },
+    {
+      "id": "D44",
+      "category": "Dust",
+      "scan": 9,
+      "annotation": "312",
+      "bbox": [
+        3666,
+        774,
+        3697,
+        796
+      ],
+      "center": [
+        3681.0,
+        784.5
+      ],
+      "annotation_span": [
+        21.0,
+        12.0
+      ],
+      "file": "D44-scan9-ann312.png"
+    },
+    {
+      "id": "D45",
+      "category": "Dust",
+      "scan": 10,
+      "annotation": "14",
+      "bbox": [
+        3305,
+        2022,
+        3325,
+        2044
+      ],
+      "center": [
+        3314.25,
+        2032.5
+      ],
+      "annotation_span": [
+        10.5,
+        12.0
+      ],
+      "file": "D45-scan10-ann14.png"
+    },
+    {
+      "id": "D46",
+      "category": "Dust",
+      "scan": 1,
+      "annotation": "865",
+      "bbox": [
+        1933,
+        13,
+        1979,
+        43
+      ],
+      "center": [
+        1955.5,
+        27.5
+      ],
+      "annotation_span": [
+        37.0,
+        21.0
+      ],
+      "file": "D46-scan1-ann865.png"
+    },
+    {
+      "id": "D47",
+      "category": "Dust",
+      "scan": 4,
+      "annotation": "355",
+      "bbox": [
+        1379,
+        1355,
+        1401,
+        1382
+      ],
+      "center": [
+        1389.5,
+        1368.0
+      ],
+      "annotation_span": [
+        13.0,
+        18.0
+      ],
+      "file": "D47-scan4-ann355.png"
+    },
+    {
+      "id": "D48",
+      "category": "Dust",
+      "scan": 8,
+      "annotation": "146",
+      "bbox": [
+        3749,
+        2169,
+        3770,
+        2189
+      ],
+      "center": [
+        3759.0,
+        2178.75
+      ],
+      "annotation_span": [
+        12.0,
+        10.5
+      ],
+      "file": "D48-scan8-ann146.png"
+    },
+    {
+      "id": "S01",
+      "category": "Short hair",
+      "scan": 1,
+      "annotation": "1259",
+      "bbox": [
+        4194,
+        2525,
+        4227,
+        2552
+      ],
+      "center": [
+        4210.0,
+        2538.0
+      ],
+      "annotation_span": [
+        24.0,
+        18.0
+      ],
+      "file": "S01-scan1-ann1259.png"
+    },
+    {
+      "id": "S02",
+      "category": "Short hair",
+      "scan": 4,
+      "annotation": "957",
+      "bbox": [
+        4759,
+        3217,
+        4793,
+        3255
+      ],
+      "center": [
+        4775.5,
+        3235.5
+      ],
+      "annotation_span": [
+        25.0,
+        29.0
+      ],
+      "file": "S02-scan4-ann957.png"
+    },
+    {
+      "id": "S03",
+      "category": "Short hair",
+      "scan": 8,
+      "annotation": "277",
+      "bbox": [
+        2072,
+        1002,
+        2101,
+        1025
+      ],
+      "center": [
+        2085.75,
+        1013.25
+      ],
+      "annotation_span": [
+        19.5,
+        13.5
+      ],
+      "file": "S03-scan8-ann277.png"
+    },
+    {
+      "id": "S04",
+      "category": "Short hair",
+      "scan": 9,
+      "annotation": "629",
+      "bbox": [
+        1930,
+        3065,
+        1988,
+        3135
+      ],
+      "center": [
+        1958.25,
+        3099.75
+      ],
+      "annotation_span": [
+        46.5,
+        58.5
+      ],
+      "file": "S04-scan9-ann629.png"
+    },
+    {
+      "id": "S05",
+      "category": "Short hair",
+      "scan": 10,
+      "annotation": "51",
+      "bbox": [
+        534,
+        2732,
+        584,
+        2785
+      ],
+      "center": [
+        558.75,
+        2757.75
+      ],
+      "annotation_span": [
+        40.5,
+        43.5
+      ],
+      "file": "S05-scan10-ann51.png"
+    },
+    {
+      "id": "S06",
+      "category": "Short hair",
+      "scan": 1,
+      "annotation": "1124",
+      "bbox": [
+        3299,
+        1551,
+        3324,
+        1567
+      ],
+      "center": [
+        3311.0,
+        1558.5
+      ],
+      "annotation_span": [
+        16.0,
+        7.0
+      ],
+      "file": "S06-scan1-ann1124.png"
+    },
+    {
+      "id": "S07",
+      "category": "Short hair",
+      "scan": 4,
+      "annotation": "926",
+      "bbox": [
+        4799,
+        2300,
+        4826,
+        2343
+      ],
+      "center": [
+        4812.0,
+        2321.0
+      ],
+      "annotation_span": [
+        18.0,
+        34.0
+      ],
+      "file": "S07-scan4-ann926.png"
+    },
+    {
+      "id": "S08",
+      "category": "Short hair",
+      "scan": 8,
+      "annotation": "278",
+      "bbox": [
+        1155,
+        1188,
+        1208,
+        1219
+      ],
+      "center": [
+        1181.25,
+        1203.0
+      ],
+      "annotation_span": [
+        43.5,
+        21.0
+      ],
+      "file": "S08-scan8-ann278.png"
+    },
+    {
+      "id": "S09",
+      "category": "Short hair",
+      "scan": 9,
+      "annotation": "627",
+      "bbox": [
+        3672,
+        2630,
+        3724,
+        2657
+      ],
+      "center": [
+        3697.5,
+        2643.0
+      ],
+      "annotation_span": [
+        42.0,
+        18.0
+      ],
+      "file": "S09-scan9-ann627.png"
+    },
+    {
+      "id": "S10",
+      "category": "Short hair",
+      "scan": 10,
+      "annotation": "53",
+      "bbox": [
+        1568,
+        3149,
+        1613,
+        3179
+      ],
+      "center": [
+        1590.0,
+        3163.5
+      ],
+      "annotation_span": [
+        36.0,
+        21.0
+      ],
+      "file": "S10-scan10-ann53.png"
+    },
+    {
+      "id": "S11",
+      "category": "Short hair",
+      "scan": 1,
+      "annotation": "1096",
+      "bbox": [
+        3484,
+        902,
+        3502,
+        938
+      ],
+      "center": [
+        3492.5,
+        919.5
+      ],
+      "annotation_span": [
+        9.0,
+        27.0
+      ],
+      "file": "S11-scan1-ann1096.png"
+    },
+    {
+      "id": "S12",
+      "category": "Short hair",
+      "scan": 4,
+      "annotation": "970",
+      "bbox": [
+        2407,
+        2691,
+        2483,
+        2725
+      ],
+      "center": [
+        2444.5,
+        2707.5
+      ],
+      "annotation_span": [
+        63.0,
+        21.0
+      ],
+      "file": "S12-scan4-ann970.png"
+    },
+    {
+      "id": "S13",
+      "category": "Short hair",
+      "scan": 8,
+      "annotation": "283",
+      "bbox": [
+        4694,
+        2206,
+        4760,
+        2232
+      ],
+      "center": [
+        4726.5,
+        2218.5
+      ],
+      "annotation_span": [
+        54.0,
+        15.0
+      ],
+      "file": "S13-scan8-ann283.png"
+    },
+    {
+      "id": "S14",
+      "category": "Short hair",
+      "scan": 9,
+      "annotation": "624",
+      "bbox": [
+        696,
+        1748,
+        751,
+        1769
+      ],
+      "center": [
+        723.0,
+        1758.0
+      ],
+      "annotation_span": [
+        45.0,
+        12.0
+      ],
+      "file": "S14-scan9-ann624.png"
+    },
+    {
+      "id": "S15",
+      "category": "Short hair",
+      "scan": 10,
+      "annotation": "44",
+      "bbox": [
+        1168,
+        1939,
+        1196,
+        2009
+      ],
+      "center": [
+        1181.25,
+        1973.25
+      ],
+      "annotation_span": [
+        16.5,
+        58.5
+      ],
+      "file": "S15-scan10-ann44.png"
+    },
+    {
+      "id": "S16",
+      "category": "Short hair",
+      "scan": 1,
+      "annotation": "1359",
+      "bbox": [
+        2345,
+        2843,
+        2412,
+        2938
+      ],
+      "center": [
+        2378.0,
+        2890.0
+      ],
+      "annotation_span": [
+        52.0,
+        80.0
+      ],
+      "file": "S16-scan1-ann1359.png"
+    },
+    {
+      "id": "S17",
+      "category": "Short hair",
+      "scan": 4,
+      "annotation": "943",
+      "bbox": [
+        851,
+        2273,
+        945,
+        2346
+      ],
+      "center": [
+        897.5,
+        2309.0
+      ],
+      "annotation_span": [
+        79.0,
+        58.0
+      ],
+      "file": "S17-scan4-ann943.png"
+    },
+    {
+      "id": "S18",
+      "category": "Short hair",
+      "scan": 8,
+      "annotation": "280",
+      "bbox": [
+        2934,
+        1383,
+        3010,
+        1478
+      ],
+      "center": [
+        2971.5,
+        1430.25
+      ],
+      "annotation_span": [
+        60.0,
+        79.5
+      ],
+      "file": "S18-scan8-ann280.png"
+    },
+    {
+      "id": "S19",
+      "category": "Short hair",
+      "scan": 9,
+      "annotation": "631",
+      "bbox": [
+        2740,
+        3238,
+        2795,
+        3350
+      ],
+      "center": [
+        2766.75,
+        3293.25
+      ],
+      "annotation_span": [
+        37.5,
+        94.5
+      ],
+      "file": "S19-scan9-ann631.png"
+    },
+    {
+      "id": "S20",
+      "category": "Short hair",
+      "scan": 10,
+      "annotation": "49",
+      "bbox": [
+        2708,
+        1691,
+        2776,
+        1784
+      ],
+      "center": [
+        2741.25,
+        1737.0
+      ],
+      "annotation_span": [
+        52.5,
+        78.0
+      ],
+      "file": "S20-scan10-ann49.png"
+    },
+    {
+      "id": "S21",
+      "category": "Short hair",
+      "scan": 1,
+      "annotation": "1313",
+      "bbox": [
+        3771,
+        2982,
+        3826,
+        3083
+      ],
+      "center": [
+        3798.0,
+        3032.0
+      ],
+      "annotation_span": [
+        40.0,
+        86.0
+      ],
+      "file": "S21-scan1-ann1313.png"
+    },
+    {
+      "id": "S22",
+      "category": "Short hair",
+      "scan": 4,
+      "annotation": "983",
+      "bbox": [
+        4649,
+        3290,
+        4790,
+        3358
+      ],
+      "center": [
+        4719.0,
+        3323.5
+      ],
+      "annotation_span": [
+        120.0,
+        47.0
+      ],
+      "file": "S22-scan4-ann983.png"
+    },
+    {
+      "id": "S23",
+      "category": "Short hair",
+      "scan": 8,
+      "annotation": "281",
+      "bbox": [
+        3336,
+        1789,
+        3499,
+        1854
+      ],
+      "center": [
+        3417.0,
+        1821.0
+      ],
+      "annotation_span": [
+        138.0,
+        39.0
+      ],
+      "file": "S23-scan8-ann281.png"
+    },
+    {
+      "id": "S24",
+      "category": "Short hair",
+      "scan": 9,
+      "annotation": "628",
+      "bbox": [
+        1940,
+        2366,
+        1973,
+        2398
+      ],
+      "center": [
+        1956.0,
+        2381.25
+      ],
+      "annotation_span": [
+        24.0,
+        22.5
+      ],
+      "file": "S24-scan9-ann628.png"
+    },
+    {
+      "id": "S25",
+      "category": "Short hair",
+      "scan": 10,
+      "annotation": "42",
+      "bbox": [
+        120,
+        1647,
+        175,
+        1741
+      ],
+      "center": [
+        147.0,
+        1693.5
+      ],
+      "annotation_span": [
+        39.0,
+        78.0
+      ],
+      "file": "S25-scan10-ann42.png"
+    },
+    {
+      "id": "S26",
+      "category": "Short hair",
+      "scan": 1,
+      "annotation": "1229",
+      "bbox": [
+        4518,
+        2341,
+        4603,
+        2370
+      ],
+      "center": [
+        4560.0,
+        2355.0
+      ],
+      "annotation_span": [
+        72.0,
+        16.0
+      ],
+      "file": "S26-scan1-ann1229.png"
+    },
+    {
+      "id": "S27",
+      "category": "Short hair",
+      "scan": 4,
+      "annotation": "969",
+      "bbox": [
+        655,
+        2673,
+        738,
+        2707
+      ],
+      "center": [
+        696.0,
+        2689.5
+      ],
+      "annotation_span": [
+        70.0,
+        21.0
+      ],
+      "file": "S27-scan4-ann969.png"
+    },
+    {
+      "id": "S28",
+      "category": "Short hair",
+      "scan": 8,
+      "annotation": "285",
+      "bbox": [
+        4578,
+        2574,
+        4600,
+        2597
+      ],
+      "center": [
+        4588.5,
+        2585.25
+      ],
+      "annotation_span": [
+        12.0,
+        13.5
+      ],
+      "file": "S28-scan8-ann285.png"
+    },
+    {
+      "id": "S29",
+      "category": "Short hair",
+      "scan": 9,
+      "annotation": "626",
+      "bbox": [
+        2533,
+        2444,
+        2606,
+        2480
+      ],
+      "center": [
+        2568.75,
+        2461.5
+      ],
+      "annotation_span": [
+        61.5,
+        24.0
+      ],
+      "file": "S29-scan9-ann626.png"
+    },
+    {
+      "id": "S30",
+      "category": "Short hair",
+      "scan": 10,
+      "annotation": "39",
+      "bbox": [
+        494,
+        1025,
+        538,
+        1057
+      ],
+      "center": [
+        515.25,
+        1040.25
+      ],
+      "annotation_span": [
+        34.5,
+        22.5
+      ],
+      "file": "S30-scan10-ann39.png"
+    },
+    {
+      "id": "S31",
+      "category": "Short hair",
+      "scan": 1,
+      "annotation": "1287",
+      "bbox": [
+        828,
+        2733,
+        861,
+        2768
+      ],
+      "center": [
+        844.0,
+        2750.0
+      ],
+      "annotation_span": [
+        24.0,
+        26.0
+      ],
+      "file": "S31-scan1-ann1287.png"
+    },
+    {
+      "id": "S32",
+      "category": "Short hair",
+      "scan": 4,
+      "annotation": "960",
+      "bbox": [
+        4784,
+        2526,
+        4818,
+        2574
+      ],
+      "center": [
+        4800.5,
+        2549.5
+      ],
+      "annotation_span": [
+        25.0,
+        39.0
+      ],
+      "file": "S32-scan4-ann960.png"
+    },
+    {
+      "id": "L01",
+      "category": "Long hair",
+      "scan": 1,
+      "annotation": "953",
+      "bbox": [
+        2155,
+        2001,
+        2218,
+        2073
+      ],
+      "center": [
+        2186.0,
+        2036.5
+      ],
+      "annotation_span": [
+        52.0,
+        61.0
+      ],
+      "file": "L01-scan1-ann953.png"
+    },
+    {
+      "id": "L02",
+      "category": "Long hair",
+      "scan": 4,
+      "annotation": "845",
+      "bbox": [
+        4765,
+        471,
+        4823,
+        553
+      ],
+      "center": [
+        4793.5,
+        511.5
+      ],
+      "annotation_span": [
+        45.0,
+        69.0
+      ],
+      "file": "L02-scan4-ann845.png"
+    },
+    {
+      "id": "L03",
+      "category": "Long hair",
+      "scan": 8,
+      "annotation": "273",
+      "bbox": [
+        1958,
+        1030,
+        2045,
+        1181
+      ],
+      "center": [
+        2001.0,
+        1104.75
+      ],
+      "annotation_span": [
+        63.0,
+        127.5
+      ],
+      "file": "L03-scan8-ann273.png"
+    },
+    {
+      "id": "L04",
+      "category": "Long hair",
+      "scan": 10,
+      "annotation": "34",
+      "bbox": [
+        4296,
+        3036,
+        4564,
+        3226
+      ],
+      "center": [
+        4429.5,
+        3130.5
+      ],
+      "annotation_span": [
+        231.0,
+        153.0
+      ],
+      "file": "L04-scan10-ann34.png"
+    },
+    {
+      "id": "L05",
+      "category": "Long hair",
+      "scan": 1,
+      "annotation": "951",
+      "bbox": [
+        4808,
+        2118,
+        4928,
+        2209
+      ],
+      "center": [
+        4867.5,
+        2163.0
+      ],
+      "annotation_span": [
+        101.0,
+        72.0
+      ],
+      "file": "L05-scan1-ann951.png"
+    },
+    {
+      "id": "L06",
+      "category": "Long hair",
+      "scan": 4,
+      "annotation": "856",
+      "bbox": [
+        4483,
+        2568,
+        4577,
+        2681
+      ],
+      "center": [
+        4529.5,
+        2624.0
+      ],
+      "annotation_span": [
+        77.0,
+        96.0
+      ],
+      "file": "L06-scan4-ann856.png"
+    },
+    {
+      "id": "L07",
+      "category": "Long hair",
+      "scan": 10,
+      "annotation": "33",
+      "bbox": [
+        4542,
+        1786,
+        4825,
+        1974
+      ],
+      "center": [
+        4683.0,
+        1879.5
+      ],
+      "annotation_span": [
+        246.0,
+        150.0
+      ],
+      "file": "L07-scan10-ann33.png"
+    },
+    {
+      "id": "L08",
+      "category": "Long hair",
+      "scan": 1,
+      "annotation": "903",
+      "bbox": [
+        3801,
+        1629,
+        3880,
+        1783
+      ],
+      "center": [
+        3840.0,
+        1705.5
+      ],
+      "annotation_span": [
+        56.0,
+        131.0
+      ],
+      "file": "L08-scan1-ann903.png"
+    },
+    {
+      "id": "L09",
+      "category": "Long hair",
+      "scan": 4,
+      "annotation": "858",
+      "bbox": [
+        2794,
+        3298,
+        2850,
+        3394
+      ],
+      "center": [
+        2821.5,
+        3345.5
+      ],
+      "annotation_span": [
+        41.0,
+        81.0
+      ],
+      "file": "L09-scan4-ann858.png"
+    },
+    {
+      "id": "L10",
+      "category": "Long hair",
+      "scan": 1,
+      "annotation": "961",
+      "bbox": [
+        3207,
+        2397,
+        3252,
+        2511
+      ],
+      "center": [
+        3229.0,
+        2453.5
+      ],
+      "annotation_span": [
+        28.0,
+        97.0
+      ],
+      "file": "L10-scan1-ann961.png"
+    },
+    {
+      "id": "L11",
+      "category": "Long hair",
+      "scan": 4,
+      "annotation": "853",
+      "bbox": [
+        2046,
+        2123,
+        2216,
+        2165
+      ],
+      "center": [
+        2130.5,
+        2143.5
+      ],
+      "annotation_span": [
+        145.0,
+        17.0
+      ],
+      "file": "L11-scan4-ann853.png"
+    },
+    {
+      "id": "L12",
+      "category": "Long hair",
+      "scan": 1,
+      "annotation": "980",
+      "bbox": [
+        3889,
+        3048,
+        4107,
+        3196
+      ],
+      "center": [
+        3997.5,
+        3121.5
+      ],
+      "annotation_span": [
+        187.0,
+        117.0
+      ],
+      "file": "L12-scan1-ann980.png"
+    },
+    {
+      "id": "L13",
+      "category": "Long hair",
+      "scan": 4,
+      "annotation": "854",
+      "bbox": [
+        3048,
+        2143,
+        3194,
+        2252
+      ],
+      "center": [
+        3120.5,
+        2197.0
+      ],
+      "annotation_span": [
+        125.0,
+        88.0
+      ],
+      "file": "L13-scan4-ann854.png"
+    },
+    {
+      "id": "L14",
+      "category": "Long hair",
+      "scan": 1,
+      "annotation": "979",
+      "bbox": [
+        3834,
+        2771,
+        4061,
+        2905
+      ],
+      "center": [
+        3947.0,
+        2837.5
+      ],
+      "annotation_span": [
+        194.0,
+        101.0
+      ],
+      "file": "L14-scan1-ann979.png"
+    },
+    {
+      "id": "L15",
+      "category": "Long hair",
+      "scan": 4,
+      "annotation": "851",
+      "bbox": [
+        2467,
+        2226,
+        2525,
+        2360
+      ],
+      "center": [
+        2495.5,
+        2292.5
+      ],
+      "annotation_span": [
+        37.0,
+        113.0
+      ],
+      "file": "L15-scan4-ann851.png"
+    },
+    {
+      "id": "L16",
+      "category": "Long hair",
+      "scan": 1,
+      "annotation": "920",
+      "bbox": [
+        4803,
+        852,
+        4881,
+        1109
+      ],
+      "center": [
+        4841.5,
+        980.0
+      ],
+      "annotation_span": [
+        41.0,
+        220.0
+      ],
+      "file": "L16-scan1-ann920.png"
+    }
+  ]
+}

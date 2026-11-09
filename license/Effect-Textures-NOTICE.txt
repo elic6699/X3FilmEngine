@@ -1,0 +1,14 @@
+FrameMatter effect textures
+==========================
+
+The release includes 41 light-leak textures and five whole-frame aging
+textures selected and supplied by the FrameMatter maintainer.
+
+Source material: Chemlooks film overlays and Onetake light-leak/aging
+textures. Original copyrights remain with their respective creators.
+FrameMatter's GPL notice does not claim ownership of these source images
+or relicense them. Renaming and SPKL conversion do not change attribution.
+
+The bundled files use neutral FrameMatter filenames. Their manifests
+record dimensions and SHA-256; the maintainer retains the original source
+mapping and preparation records separately.

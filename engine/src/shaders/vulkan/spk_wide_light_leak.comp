@@ -1,0 +1,358 @@
+#version 450
+
+// SPDX-FileCopyrightText: 2026 LittleSixNine
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Applies only to FrameMatter contributions; upstream notices are retained. See COPYRIGHT.txt.
+// Faithful line-by-line transcription of overscan.metal's spk_wide_light_leak
+// kernel (:732-813) and every helper it reaches.
+//
+// Transitive closure of the helpers actually used by this kernel:
+//   canvas_to_film (:48-52), hash_u/hash_f/value_noise (:54-63),
+//   perf_sdf (:410-461), kHoleEdgeSigma (:471), erf_as (:474-478),
+//   film_alpha (:481-496), wide_sample/wide_matrix/wide_encode/wide_decode
+//   (:712-731).
+// film_alpha only reaches perf_sdf -> hash_u/hash_f/value_noise and erf_as;
+// gate_sdf (:91-126) / sd_quad (:67-81) are NOT in this closure and are not
+// transcribed (they are used by scratch_mask/dust_mask/exposure_gate_sdf).
+//
+// TWO DISTINCT PARAMETER BLOCKS -- do not mix them:
+//   * binding 1 `P[]`  : this kernel's OWN float[37] parameter block. The
+//     kernel body indexes it with LITERAL indices P[0]..P[36] and the CAT02
+//     matrices P+13 / P+22. These literals are NOT the OsP enum values.
+//     wide_matrix() reads P[] (its device pointer was P+13 / P+22).
+//   * binding 3 `G[]`  : overscan's P_COUNT=277 geometry block (the `geometry`
+//     argument at :743). canvas_to_film / perf_sdf / film_alpha read G[] via
+//     the OsP enum constants. In the Metal source these helpers took a
+//     `device const float* P` that was the 277-float block; here that pointer
+//     becomes G[].
+//
+// Metal binding 2 is `device const ushort*` -- a uint16_t[w*h*3] RGB16 texture
+// uploaded raw. std430 has no 16-bit scalar, so it is declared uint[] and read
+// little-endian halfword-by-halfword through tex_u16(). wide_sample keeps the
+// source's own / 65535.0f normalisation (float(ushort) -> [0,1]).
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer Rgb      { float rgb[]; };
+layout(std430, binding = 1) readonly buffer Par      { float P[]; };
+layout(std430, binding = 2) readonly buffer Tex      { uint tex[]; };
+layout(std430, binding = 3) readonly buffer Geometry { float G[]; };
+layout(std430, binding = 4) buffer Out               { float outp[]; };
+
+// vulkan_gpu.cpp folds a dispatch past maxComputeWorkGroupCount[0] (65535 on
+// lavapipe and Intel) into rows of workgroups; this is the 1D index it means.
+uint spk_global_index() {
+    return gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x;
+}
+
+const float M_PI_F = 3.141592653589793;
+
+// enum : uint { ... } (overscan.metal :17-45). Values are identical.
+const uint P_CW = 0u;
+const uint P_CH = 1u;
+const uint P_PX = 2u;
+const uint P_FW = 3u;
+const uint P_FH = 4u;
+const uint P_A00 = 5u;
+const uint P_A01 = 6u;
+const uint P_A10 = 7u;
+const uint P_A11 = 8u;
+const uint P_CS = 9u;
+const uint P_CT = 10u;
+const uint P_CU = 11u;
+const uint P_CV = 12u;
+const uint P_VERTICAL = 13u;
+const uint P_GS0 = 14u;
+const uint P_GT0 = 15u;
+const uint P_GW = 16u;
+const uint P_GH = 17u;
+const uint P_CORNER = 18u;
+const uint P_PENUMBRA = 19u;
+const uint P_WOB_A = 20u;                // 4 sides x 3 harmonics
+const uint P_WOB_PH = 32u;               // 4 sides x 3 harmonics
+const uint P_FILM_W = 44u;
+const uint P_FOG_AMP = 45u;
+const uint P_FOG_WIDTH = 46u;
+const uint P_FOG_SEED = 47u;
+const uint P_FOG_PERIOD = 48u;
+const uint P_FOG_R = 49u;
+const uint P_FOG_G = 50u;
+const uint P_FOG_B = 51u;
+const uint P_N_LEAKS = 52u;
+const uint P_PERFORATED = 83u;
+const uint P_PERF_PITCH = 84u;
+const uint P_PERF_W = 85u;
+const uint P_PERF_H = 86u;
+const uint P_PERF_EDGE = 87u;
+const uint P_PERF_R = 88u;
+const uint P_PERF_PHASE = 89u;
+const uint P_HOLE_C = 90u;
+const uint P_HOLE_M = 91u;
+const uint P_HOLE_Y = 92u;
+const uint P_FLARE_AMP = 93u;
+const uint P_FLARE_WIDTH = 94u;
+const uint P_GATE_R = 95u;               // 4 corner radii: (s-,t-), (s+,t-), (s-,t+)
+const uint P_N_Q = 99u;
+const uint P_Q = 100u;                   // up to 8 x (4 vertices s,t; round; sign)
+const uint P_ROUGH_AMP = 180u;
+const uint P_ROUGH_PERIOD = 181u;
+const uint P_ROUGH_SEED = 182u;
+const uint P_HOLES_LIGHT = 183u;
+const uint P_LIGHT_R = 184u;
+const uint P_LIGHT_G = 185u;
+const uint P_LIGHT_B = 186u;
+const uint P_PERF_SEED = 187u;
+const uint P_LIGHT_FALL = 188u;
+const uint P_LIGHT_DIR = 189u;
+const uint P_WALL_T = 190u;
+const uint P_WALL_VS = 191u;
+const uint P_WALL_VT = 192u;
+const uint P_WALL_PAR = 193u;
+const uint P_BASE_R = 194u;
+const uint P_BASE_G = 195u;
+const uint P_BASE_B = 196u;
+const uint P_WALL_GLOW = 197u;
+const uint P_WALL_SCATTER = 198u;
+const uint P_CARRIER = 199u;
+const uint P_LEAKS = 200u;               // up to 12 x (s, side, amp, sigma_s, sigma_t)
+const uint P_PAIR_ADV = 260u;            // > 0: the same gate exposed again this far along
+const uint P_SCRATCH_STRENGTH = 261u;
+const uint P_SCRATCH_LONG = 262u;
+const uint P_SCRATCH_SEED = 263u;
+const uint P_SCRATCH_EDGE = 264u;
+const uint P_PERF_LEAK = 265u;
+const uint P_PERF_LEAK_SPREAD = 266u;
+const uint P_FULL_WIDTH = 267u;
+const uint P_DUST_AMOUNT = 268u;
+const uint P_DUST_SIZE = 269u;
+const uint P_DUST_STRENGTH = 270u;
+const uint P_DUST_FULL_FRAME = 271u;
+const uint P_DUST_FIBER_RATIO = 272u;
+const uint P_PERF_LEAK_STYLE = 273u;
+const uint P_PERF_LEAK_COVERAGE = 274u;
+const uint P_PERF_LEAK_SOFTNESS = 275u;
+const uint P_PERF_LEAK_SEED = 276u;
+const uint P_COUNT = 277u;
+const uint kQStride = 10u;
+
+// ushort RGB16 texture: little-endian 16-bit halfword out of a 32-bit word.
+// Metal's `texture[i]` is a ushort; tex_u16(i) returns its 0..65535 value.
+uint tex_u16(uint idx) {
+    uint w = tex[idx >> 1u];
+    return (w >> ((idx & 1u) * 16u)) & 0xffffu;
+}
+
+// (overscan.metal :48-52) -- reads the 277-float geometry block G[].
+vec2 canvas_to_film(float x, float y) {
+    const float u = (x + 0.5f) * G[P_PX] - G[P_CU];
+    const float v = (y + 0.5f) * G[P_PX] - G[P_CV];
+    return vec2(G[P_A00] * u + G[P_A01] * v + G[P_CS], G[P_A10] * u + G[P_A11] * v + G[P_CT]);
+}
+
+// (overscan.metal :54-63) -- pure functions, no parameter block.
+uint hash_u(uint x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+float hash_f(int i, uint seed) { return float(hash_u(uint(i) * 0x9E3779B9u ^ seed)) * (1.0f / 4294967295.0f); }
+float value_noise(float x, uint seed) {
+    const float i0 = floor(x), f = x - i0;
+    const float w = f * f * (3.0f - 2.0f * f);
+    return mix(hash_f(int(i0), seed), hash_f(int(i0) + 1, seed), w);
+}
+
+// The nearest perforation's signed distance (mm, negative inside). `hole`
+// returns the hole's own hash (row and index) for the scan's dust.
+// (overscan.metal :410-461) -- reads the 277-float geometry block G[].
+float perf_sdf(vec2 st, inout uint hole) {
+    const float W = G[P_FILM_W];
+    const float pitch = G[P_PERF_PITCH], ph = G[P_PERF_PHASE];
+    // The nearest hole: the cell is centred on it. (It began at the hole's
+    // leading edge, so just outside that edge the distance was the previous
+    // hole's -- 2.8 mm -- and that side had no shoulder, no flare, and a hard
+    // cut where the other three sides were soft.)
+    const float k = floor((st.x - ph - 0.5f * G[P_PERF_W]) / pitch + 0.5f);
+    const bool top = st.y < 0.5f * W;
+    const uint seed = uint(G[P_PERF_SEED]);
+    hole = hash_u(uint(int(k) * 2 + (top ? 0 : 1)) * 0x9E3779B9u ^ seed);
+    const float j0 = hash_f(int(hole & 0xFFFFu), seed ^ 0x1u) - 0.5f, j1 = hash_f(int(hole & 0xFFFFu), seed ^ 0x2u) - 0.5f;
+    const float j2 = hash_f(int(hole & 0xFFFFu), seed ^ 0x3u) - 0.5f, j3 = hash_f(int(hole & 0xFFFFu), seed ^ 0x4u) - 0.5f;
+    const float j4 = hash_f(int(hole & 0xFFFFu), seed ^ 0x5u) - 0.5f;
+    const float wa = G[P_PERF_W] + 0.016f * j2, hc = G[P_PERF_H] + 0.016f * j3;
+    const float r = clamp(G[P_PERF_R] + 0.08f * j4, 0.3f, 0.6f);
+    const float sc = ph + k * pitch + 0.5f * G[P_PERF_W] + 0.020f * j0;
+    const float tc = (top ? G[P_PERF_EDGE] + 0.5f * G[P_PERF_H] : W - G[P_PERF_EDGE] - 0.5f * G[P_PERF_H]) + 0.024f * j1;
+    const vec2 q = abs(vec2(st.x - sc, st.y - tc)) - vec2(0.5f * wa - r, 0.5f * hc - r);
+    float d = length(max(q, 0.0f)) + min(max(q.x, q.y), 0.0f) - r;
+    // the punched edge: each hole's own roughness, 1-4 microns
+    const float rough = 0.001f + 0.003f * hash_f(int(hole & 0xFFFFu), seed ^ 0x6u);
+    d += rough * (value_noise(st.x / 0.05f, seed ^ 0x77u) + value_noise(st.y / 0.05f, seed ^ 0x99u) - 1.0f) * 2.0f;
+    // a burr or a chip on about one hole in four: a 20-50 micron bump on the
+    // edge, extending the hole outward at its left short-edge centre
+    if (hash_f(int(hole & 0xFFFFu), seed ^ 0x7u) < 0.25f) {
+        // The owner fixes the film leader at s-: pull contact is the left short-edge centre.
+        const vec2 pb = vec2(sc - 0.5f * wa, tc);
+        const float sig = 0.020f + 0.030f * hash_f(int(hole & 0xFFFFu), seed ^ 0x9u);
+        // Negative signed-distance displacement expands the hole into the film, towards s-.
+        const float amp = -(0.006f + 0.010f * hash_f(int(hole & 0xFFFFu), seed ^ 0xBu));
+        d += amp * exp(-dot(st - pb, st - pb) / (sig * sig));
+    }
+    // Extend the existing Gaussian burr/chip at the sprocket's pull-contact point.
+    // shortcut: dimensions are visual estimates; calibrate against measured negatives for physical claims.
+    const float wear = G[P_SCRATCH_EDGE];
+    const vec2 contact = vec2(sc - 0.5f * wa, tc);
+    const vec2 qwear = st - contact;
+    if (wear > 0.0f && abs(qwear.x) < 0.20f && abs(qwear.y) < 0.18f) {
+        const uint ws = uint(G[P_SCRATCH_SEED]) ^ hole ^ 0xD271u;
+        if (hash_f(0, ws ^ 0x7u) < 0.75f) {
+            const vec2 sig = vec2(0.025f + 0.020f * hash_f(0, ws ^ 0x8u),
+                                  0.035f + 0.040f * hash_f(0, ws ^ 0x9u));
+            const float amp = -wear * (0.015f + 0.035f * hash_f(0, ws ^ 0xBu));
+            const vec2 z = qwear / sig;
+            const float end = 1.0f - smoothstep(0.10f, 0.18f, abs(qwear.y));
+            d += amp * exp(-dot(z,z)) * end *
+                 (0.75f + 0.25f * value_noise(qwear.y / 0.012f, ws ^ 0x77u));
+        }
+    }
+    return d;
+}
+
+// How soft a perforation's edge is in a scan, as the sigma of a Gaussian edge
+// in film millimetres. (overscan.metal :471)
+const float kHoleEdgeSigma = 0.017f;
+
+// erf, Abramowitz and Stegun 7.1.26 (|error| < 1.5e-7). (overscan.metal :474-478)
+float erf_as(float x) {
+    const float t = 1.0f / (1.0f + 0.3275911f * abs(x));
+    const float y = 1.0f - (((((1.061405429f * t - 1.453152027f) * t) + 1.421413741f) * t - 0.284496736f) * t + 0.254829592f) * t * exp(-x * x);
+    return x < 0.0f ? -y : y;
+}
+
+// Where there is film: 1 on the strip, 0 in the perforations and past its edges.
+// (overscan.metal :481-496) -- reads the 277-float geometry block G[].
+float film_alpha(vec2 st) {
+    const float W = G[P_FILM_W], px = G[P_PX];
+    // (with no carrier the canvas is the film's width, and the film runs on
+    // under the corners a tilted scan carries past its edge)
+    float a = G[P_CARRIER] > 1.5f ? 1.0f : clamp(min(st.y, W - st.y) / px + 0.5f, 0.0f, 1.0f);
+    if (G[P_PERFORATED] > 0.5f) {
+        uint hole;
+        // The hole's edge as the scan resolves it: the measured softness, and
+        // the pixel's own width (a one-pixel ramp is a sigma of 0.31 px), so a
+        // small render is no softer than it was and a large one no harder
+        // than film.
+        const float sigma = sqrt(kHoleEdgeSigma * kHoleEdgeSigma + 0.0961f * px * px);
+        a *= 0.5f + 0.5f * erf_as(perf_sdf(st, hole) / (1.41421356f * sigma));
+    }
+    return a;
+}
+
+// Local user textures contain processed, assumed-sRGB RGB16 values, not spectral radiance.
+// (overscan.metal :712-722) -- device const ushort* texture becomes the global tex[] SSBO.
+vec3 wide_sample(uint w, uint h, vec2 uv) {
+    const vec2 p = clamp(uv, 0.0f, 1.0f) * vec2(float(w - 1u), float(h - 1u));
+    const uvec2 a = uvec2(floor(p)), b = min(a + 1u, uvec2(w - 1u, h - 1u));
+    const vec2 f = fract(p);
+    const uint i00 = 3u * (a.y * w + a.x), i10 = 3u * (a.y * w + b.x),
+               i01 = 3u * (b.y * w + a.x), i11 = 3u * (b.y * w + b.x);
+    const vec3 c00 = vec3(float(tex_u16(i00)), float(tex_u16(i00 + 1u)), float(tex_u16(i00 + 2u))) / 65535.0f;
+    const vec3 c10 = vec3(float(tex_u16(i10)), float(tex_u16(i10 + 1u)), float(tex_u16(i10 + 2u))) / 65535.0f;
+    const vec3 c01 = vec3(float(tex_u16(i01)), float(tex_u16(i01 + 1u)), float(tex_u16(i01 + 2u))) / 65535.0f;
+    const vec3 c11 = vec3(float(tex_u16(i11)), float(tex_u16(i11 + 1u)), float(tex_u16(i11 + 2u))) / 65535.0f;
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
+// (overscan.metal :723-725) -- the device pointer m (P+13 / P+22) becomes a
+// base index into this kernel's own P[] (binding 1), NOT the geometry block.
+vec3 wide_matrix(vec3 c, uint base) {
+    return vec3(dot(c, vec3(P[base + 0u], P[base + 1u], P[base + 2u])),
+                dot(c, vec3(P[base + 3u], P[base + 4u], P[base + 5u])),
+                dot(c, vec3(P[base + 6u], P[base + 7u], P[base + 8u])));
+}
+
+// (overscan.metal :726-731) -- select(a,b,c) -> mix(a,b,c) with a bvec selector.
+vec3 wide_encode(vec3 c) {
+    return mix(12.92f * c, 1.055f * pow(max(c, 0.0f), vec3(1.0f / 2.4f)) - 0.055f, greaterThan(c, vec3(0.0031308f)));
+}
+vec3 wide_decode(vec3 c) {
+    return mix(c / 12.92f, pow(max((c + 0.055f) / 1.055f, 0.0f), vec3(2.4f)), greaterThan(c, vec3(0.04045f)));
+}
+
+// (overscan.metal :732-813) spk_wide_light_leak. All P[...] below are this
+// kernel's own float[37] block (binding 1) with literal indices; geometry is
+// only reached through film_alpha/canvas_to_film above, via G[] (binding 3).
+void main() {
+    const uint i = spk_global_index(), w = uint(P[0]), h = uint(P[1]);
+    if (i >= w * h) return;
+    const vec3 original = vec3(rgb[3u * i], rgb[3u * i + 1u], rgb[3u * i + 2u]);
+    const vec2 pixel = vec2(float(i % w) + 0.5f, float(i / w) + 0.5f);
+    float film = 1.0f;
+    if (P[12] > 0.5f) film = film_alpha(canvas_to_film(pixel.x - 0.5f, pixel.y - 0.5f));
+    const bool aging = P[35] > 0.5f;
+    vec2 q = pixel, span = vec2(float(w), float(h));
+    if (aging) {
+        const uint mirror = uint(P[34]);
+        if ((mirror & 1u) != 0u) q.x = span.x - q.x;
+        if ((mirror & 2u) != 0u) q.y = span.y - q.y;
+        // Match portrait orientation first, then apply saved clockwise quarter-turns.
+        const int turns = (h > w ? 1 : 0) + int(P[36]);
+        for (int turn = 0; turn < turns; ++turn) { q = vec2(q.y, span.x - q.x); span = span.yx; }
+    }
+    if (P[31] < 0.5f) {
+        const int direction = int(P[7]);
+        if (direction == 1) q.x = span.x - q.x;
+        else if (direction == 2) { q = vec2(pixel.y, float(w) - pixel.x); span = vec2(float(h), float(w)); }
+        else if (direction == 3) { q = vec2(float(h) - pixel.y, pixel.x); span = vec2(float(h), float(w)); }
+    }
+    const vec2 ts = vec2(P[2], P[3]);
+    const uint seed = uint(P[9]);
+    const float jitter = 0.03f * (hash_f(0, seed ^ 0xA31u) - 0.5f);
+    const float vertical = 0.03f * (hash_f(0, seed ^ 0xA32u) - 0.5f);
+    vec2 uv;
+    if (P[31] > 0.5f) {
+        const float aspect = span.x / span.y, textureAspect = ts.x / ts.y;
+        const vec2 window = vec2(min(1.0f, aspect / textureAspect), min(1.0f, textureAspect / aspect));
+        vec2 unit = q / span;
+        const uint flip = uint(P[34]);
+        if (!aging && (flip & 1u) != 0u) unit.x = 1.0f - unit.x;
+        if (!aging && (flip & 2u) != 0u) unit.y = 1.0f - unit.y;
+        // Flip inside the selected window so a mirror cannot crop away the retained edge.
+        uv = (1.0f - window) * vec2(P[32], P[33]) + unit * window;
+    } else if (P[10] > 0.5f) {
+        const float scale = max(span.x / ts.x, span.y / ts.y) * P[6] / 1.2f;
+        uv = ((q - (span - ts * scale) * 0.5f) / scale) / ts + vec2(jitter, vertical);
+    } else {
+        const float scale = span.y / ts.y * P[6];
+        uv = vec2((q.x - (P[5] + jitter) * span.x) / (scale * ts.x) + P[11],
+                  (q.y - (span.y - ts.y * scale) * 0.5f) / (scale * ts.y) + vertical);
+    }
+    vec3 light = wide_sample(uint(ts.x), uint(ts.y), uv);
+    if (aging) {
+        const float aspect = span.x / span.y, textureAspect = ts.x / ts.y;
+        const vec2 window = vec2(min(1.0f, aspect / textureAspect), min(1.0f, textureAspect / aspect));
+        const vec2 footprint = 0.25f * window / span;
+        light = 0.25f * (wide_sample(uint(ts.x), uint(ts.y), uv + footprint) +
+                         wide_sample(uint(ts.x), uint(ts.y), uv - footprint) +
+                         wide_sample(uint(ts.x), uint(ts.y), uv + vec2(footprint.x, -footprint.y)) +
+                         wide_sample(uint(ts.x), uint(ts.y), uv + vec2(-footprint.x, footprint.y)));
+    }
+    if (P[8] > 0.0f && !aging) {
+        const float radius = 0.025f * min(ts.x, ts.y) * P[8] * P[8];
+        const vec2 dx = vec2(radius / ts.x, 0.0f), dy = vec2(0.0f, radius / ts.y);
+        light = 0.4f * light + 0.15f * (wide_sample(uint(ts.x), uint(ts.y), uv - dx) +
+              wide_sample(uint(ts.x), uint(ts.y), uv + dx) + wide_sample(uint(ts.x), uint(ts.y), uv - dy) +
+              wide_sample(uint(ts.x), uint(ts.y), uv + dy));
+    }
+    vec3 result = original;
+    const float peak = max(light.x, max(light.y, light.z));
+    if (film > 1e-6f && peak > 1e-8f) {
+        const float strength = P[4];
+        const float tail = aging ? 0.0f : clamp((strength - 0.7f) / 0.3f, 0.0f, 1.0f);
+        const float gain = aging ? strength : min(strength / 0.7f, 1.0f) + 3.0f * tail * tail;
+        const vec3 encoded = wide_encode(wide_matrix(original, 13u));
+        vec3 screen = encoded + max(1.0f - encoded, 0.0f) * clamp(light * gain, 0.0f, 1.0f);
+        // The natural Screen range ends at 70%; only the remaining range lifts toward white.
+        const float white = smoothstep(0.0f, 1.0f, tail) * smoothstep(0.12f, 0.65f, peak);
+        screen = mix(screen, max(screen, 1.0f), white);
+        result = mix(original, wide_matrix(wide_decode(screen), 22u), film);
+    }
+    outp[3u * i] = result.x; outp[3u * i + 1u] = result.y; outp[3u * i + 2u] = result.z;
+}

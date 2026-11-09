@@ -1,0 +1,369 @@
+#version 450
+
+// SPDX-FileCopyrightText: 2026 LittleSixNine
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Applies only to FrameMatter contributions; upstream notices are retained. See COPYRIGHT.txt.
+// Faithful line-by-line transcription of overscan.metal's spk_overscan_light
+// kernel (:635-709) and every helper it reaches.
+//
+// Transitive closure of the helpers actually used by this kernel:
+//   canvas_to_film (:48-52), hash_u/hash_f/value_noise (:54-63),
+//   perf_sdf (:410-461), kHoleEdgeSigma (:471), erf_as (:474-478),
+//   film_alpha (:481-496).
+// perforation_light (:162-235) is also transcribed because the task lists it
+// as a dependency of this kernel. NOTE: the light kernel's own call graph does
+// NOT reach it (it is reached only by perforation_leak, which this kernel never
+// calls); it is dead code here, with no effect on output or on the 4 bindings.
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer Rgb { float rgb[]; };
+layout(std430, binding = 1) readonly buffer Par { float P[]; };
+layout(std430, binding = 2) readonly buffer Cnt { uint  n[]; };
+layout(std430, binding = 3) buffer         Out { float outp[]; };
+
+// vulkan_gpu.cpp folds a dispatch past maxComputeWorkGroupCount[0] (65535 on
+// lavapipe and Intel) into rows of workgroups; this is the 1D index it means.
+uint spk_global_index() {
+    return gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x;
+}
+
+const float M_PI_F = 3.141592653589793;
+
+// enum : uint { ... } (overscan.metal :17-45). Values are identical.
+const uint P_CW = 0u;
+const uint P_CH = 1u;
+const uint P_PX = 2u;
+const uint P_FW = 3u;
+const uint P_FH = 4u;
+const uint P_A00 = 5u;
+const uint P_A01 = 6u;
+const uint P_A10 = 7u;
+const uint P_A11 = 8u;
+const uint P_CS = 9u;
+const uint P_CT = 10u;
+const uint P_CU = 11u;
+const uint P_CV = 12u;
+const uint P_VERTICAL = 13u;
+const uint P_GS0 = 14u;
+const uint P_GT0 = 15u;
+const uint P_GW = 16u;
+const uint P_GH = 17u;
+const uint P_CORNER = 18u;
+const uint P_PENUMBRA = 19u;
+const uint P_WOB_A = 20u;                // 4 sides x 3 harmonics
+const uint P_WOB_PH = 32u;               // 4 sides x 3 harmonics
+const uint P_FILM_W = 44u;
+const uint P_FOG_AMP = 45u;
+const uint P_FOG_WIDTH = 46u;
+const uint P_FOG_SEED = 47u;
+const uint P_FOG_PERIOD = 48u;
+const uint P_FOG_R = 49u;
+const uint P_FOG_G = 50u;
+const uint P_FOG_B = 51u;
+const uint P_N_LEAKS = 52u;
+const uint P_PERFORATED = 83u;
+const uint P_PERF_PITCH = 84u;
+const uint P_PERF_W = 85u;
+const uint P_PERF_H = 86u;
+const uint P_PERF_EDGE = 87u;
+const uint P_PERF_R = 88u;
+const uint P_PERF_PHASE = 89u;
+const uint P_HOLE_C = 90u;
+const uint P_HOLE_M = 91u;
+const uint P_HOLE_Y = 92u;
+const uint P_FLARE_AMP = 93u;
+const uint P_FLARE_WIDTH = 94u;
+const uint P_GATE_R = 95u;               // 4 corner radii: (s-,t-), (s+,t-), (s+,t+), (s-,t+)
+const uint P_N_Q = 99u;
+const uint P_Q = 100u;                   // up to 8 x (4 vertices s,t; round; sign)
+const uint P_ROUGH_AMP = 180u;
+const uint P_ROUGH_PERIOD = 181u;
+const uint P_ROUGH_SEED = 182u;
+const uint P_HOLES_LIGHT = 183u;
+const uint P_LIGHT_R = 184u;
+const uint P_LIGHT_G = 185u;
+const uint P_LIGHT_B = 186u;
+const uint P_PERF_SEED = 187u;
+const uint P_LIGHT_FALL = 188u;
+const uint P_LIGHT_DIR = 189u;
+const uint P_WALL_T = 190u;
+const uint P_WALL_VS = 191u;
+const uint P_WALL_VT = 192u;
+const uint P_WALL_PAR = 193u;
+const uint P_BASE_R = 194u;
+const uint P_BASE_G = 195u;
+const uint P_BASE_B = 196u;
+const uint P_WALL_GLOW = 197u;
+const uint P_WALL_SCATTER = 198u;
+const uint P_CARRIER = 199u;
+const uint P_LEAKS = 200u;               // up to 12 x (s, side, amp, sigma_s, sigma_t)
+const uint P_PAIR_ADV = 260u;            // > 0: the same gate exposed again this far along
+const uint P_SCRATCH_STRENGTH = 261u;
+const uint P_SCRATCH_LONG = 262u;
+const uint P_SCRATCH_SEED = 263u;
+const uint P_SCRATCH_EDGE = 264u;
+const uint P_PERF_LEAK = 265u;
+const uint P_PERF_LEAK_SPREAD = 266u;
+const uint P_FULL_WIDTH = 267u;
+const uint P_DUST_AMOUNT = 268u;
+const uint P_DUST_SIZE = 269u;
+const uint P_DUST_STRENGTH = 270u;
+const uint P_DUST_FULL_FRAME = 271u;
+const uint P_DUST_FIBER_RATIO = 272u;
+const uint P_PERF_LEAK_STYLE = 273u;
+const uint P_PERF_LEAK_COVERAGE = 274u;
+const uint P_PERF_LEAK_SOFTNESS = 275u;
+const uint P_PERF_LEAK_SEED = 276u;
+const uint P_COUNT = 277u;
+const uint kQStride = 10u;
+
+vec2 canvas_to_film(float x, float y) {
+    const float u = (x + 0.5f) * P[P_PX] - P[P_CU];
+    const float v = (y + 0.5f) * P[P_PX] - P[P_CV];
+    return vec2(P[P_A00] * u + P[P_A01] * v + P[P_CS], P[P_A10] * u + P[P_A11] * v + P[P_CT]);
+}
+
+uint hash_u(uint x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+float hash_f(int i, uint seed) { return float(hash_u(uint(i) * 0x9E3779B9u ^ seed)) * (1.0f / 4294967295.0f); }
+float value_noise(float x, uint seed) {
+    const float i0 = floor(x), f = x - i0;
+    const float w = f * f * (3.0f - 2.0f * f);
+    return mix(hash_f(int(i0), seed), hash_f(int(i0) + 1, seed), w);
+}
+
+// (overscan.metal :158) forward declaration; defined in full below.
+float perf_sdf(vec2 st, inout uint hole);
+
+// One perforation's seeded light events: rim weight, soft halo and local thickness.
+// shortcut: visual light placement, not calibrated propagation through a specific film base.
+vec3 perforation_light(vec2 st, int nearest, uint seed) {
+    const float pitch = P[P_PERF_PITCH], phase = P[P_PERF_PHASE];
+    const bool row_top = st.y < 0.5f * P[P_FILM_W];
+    const uint row_seed = seed ^ (row_top ? 0xA101u : 0xB202u);
+    const uint hole = hash_u(uint(nearest * 2 + (row_top ? 0 : 1)) * 0x9E3779B9u ^ uint(P[P_PERF_SEED]));
+    const uint rim_seed = row_seed ^ hole;
+    const bool regular = int(P[P_PERF_LEAK_STYLE]) <= 1;
+    const float coverage = int(P[P_PERF_LEAK_STYLE]) == 0 ? P[P_PERF_LEAK_COVERAGE] : 0.0f;
+    const float shared_angle = 2.0f * M_PI_F * hash_f(0, seed ^ 0x14u);
+    const float size = regular ? 0.8f + 0.4f * hash_f(0, rim_seed ^ 0x18u) : 1.0f;
+    const bool top = st.y < 0.5f * P[P_FILM_W];
+    const vec2 half_size = 0.5f * vec2(P[P_PERF_W], P[P_PERF_H]);
+    const vec2 center = vec2(phase + float(nearest) * pitch + half_size.x,
+                             top ? P[P_PERF_EDGE] + half_size.y : P[P_FILM_W] - P[P_PERF_EDGE] - half_size.y);
+    const vec2 local = st - center;
+    const float u = atan(local.y / half_size.y, local.x / half_size.x) * (0.5f / M_PI_F) + 0.5f;
+    const float spread = P[P_PERF_LEAK_SPREAD];
+    float rim_field = 0.0f, halo_field = 0.0f, thickness_sum = 0.0f;
+    // Seeded light events, like spool leaks; wrapped distances have no seam around the outline.
+    const int count = regular ? 3 : 1 + min(2, int(3.0f * hash_f(0, rim_seed ^ 0x10u)));
+    for (int k = 0; k < count; ++k) {
+        // Every hole has a main arc in the same direction; small shoulders vary its shape.
+        const float position = regular ? shared_angle * (0.5f / M_PI_F) + 0.5f +
+            (k == 0 ? 0.0f : (k == 1 ? -0.10f : 0.10f)) : hash_f(k, rim_seed ^ 0x11u);
+        const float width = regular ? (k == 0 ? 0.12f : 0.055f) * size * (1.0f + 3.0f * coverage) :
+            0.035f + 0.09f * hash_f(k, rim_seed ^ 0x12u);
+        const float amplitude = regular ? (k == 0 ? 1.0f : 0.1f + 0.1f * hash_f(k, rim_seed ^ 0x13u)) :
+            exp2(-0.7f + 1.4f * hash_f(k, rim_seed ^ 0x13u));
+        const float turn = u - position - floor(u - position + 0.5f);
+        const float du = regular ? abs(turn) : min(abs(u - position), 1.0f - abs(u - position));
+        const float x = du / width;
+        const float soft_x = du / (width * (1.3f + 0.7f * spread));
+        const float event = amplitude * exp(-0.5f * x * x);
+        // Each light event has its own thickness, tapering smoothly along the arc.
+        const float shift = 1.2f * (hash_f(k, rim_seed ^ 0x19u) - 0.5f);
+        const float taper_x = turn / width + shift;
+        const float sigma = 0.007f + 0.058f * pow(hash_f(k, rim_seed ^ 0x18u), 2.0f);
+        thickness_sum += event * sigma * (0.55f + 0.45f * exp(-0.5f * taper_x * taper_x));
+        rim_field += event;
+        halo_field += amplitude * exp(-0.5f * soft_x * soft_x);
+    }
+    // The scratch envelope's smooth threshold makes lit arcs fade to genuinely unlit stretches.
+    const float arc = smoothstep(0.15f, 0.85f, rim_field);
+    const float envelope = mix(arc, 0.35f + 0.65f * arc, coverage);
+    const float q_radius = P[P_PERF_R];
+    const vec2 q = abs(local) - (half_size - q_radius);
+    const vec2 outside = max(q, 0.0f);
+    const vec2 normal = length(outside) > 1e-5f ? normalize(outside) * sign(local)
+        : (q.x > q.y ? vec2(sign(local.x), 0.0f) : vec2(0.0f, sign(local.y)));
+    const float angle = shared_angle + (regular ? 0.0f :
+                        0.12f * (hash_f(0, rim_seed ^ 0x15u) - 0.5f));
+    // As in the scan-wall model, a side facing the light receives more than the opposite side.
+    const float facing = 0.15f + 0.85f * max(0.0f, dot(normal, vec2(cos(angle), sin(angle))));
+    // Broader coverage lifts the back-facing arc without erasing the shared light direction.
+    const float direction = mix(facing, 0.65f + 0.35f * facing, coverage);
+    const float presence = hash_f(0, rim_seed ^ 0x16u) < 0.75f ? 1.0f : 0.05f;
+    const float trend = 0.4f + 0.6f * value_noise(st.x / (3.0f * pitch), seed);
+    const float hole_weight = regular ? 0.3f * (0.8f + 0.4f * hash_f(0, rim_seed ^ 0x17u)) :
+        presence * (0.35f + 0.65f * hash_f(0, rim_seed ^ 0x17u)) * trend;
+    const float rim_weight = hole_weight * direction * envelope * (1.0f + 0.75f * envelope);
+    // A three-neighbour sum merges adjacent halos without nearest-cell amplitude jumps.
+    const float radius = length(outside) + min(max(q.x, q.y), 0.0f) - q_radius;
+    const float sigma = (0.06f + 0.54f * spread * spread) * (int(P[P_PERF_LEAK_STYLE]) == 2 ? 2.2f : size);
+    const float x = max(radius, 0.0f) / sigma;
+    const float halo = 0.8f * exp(-0.5f * x * x) + 0.2f * exp(-0.5f * x * x / 9.0f);
+    const float halo_weight = hole_weight * (0.25f + 0.75f * direction) *
+                              (0.04f + 0.96f * (1.0f - exp(-halo_field)));
+    const float support = 1.0f - smoothstep(pitch, 1.4f * pitch, abs(local.x));
+    return vec3(rim_weight, halo_weight * halo * support,
+                (regular ? 0.035f * size : thickness_sum / max(rim_field, 1e-8f)) *
+                (0.45f + 0.55f * direction));
+}
+
+// The nearest perforation's signed distance (mm, negative inside). `hole`
+// returns the hole's own hash (row and index) for the scan's dust.
+float perf_sdf(vec2 st, inout uint hole) {
+    const float W = P[P_FILM_W];
+    const float pitch = P[P_PERF_PITCH], ph = P[P_PERF_PHASE];
+    const float k = floor((st.x - ph - 0.5f * P[P_PERF_W]) / pitch + 0.5f);
+    const bool top = st.y < 0.5f * W;
+    const uint seed = uint(P[P_PERF_SEED]);
+    hole = hash_u(uint(int(k) * 2 + (top ? 0 : 1)) * 0x9E3779B9u ^ seed);
+    const float j0 = hash_f(int(hole & 0xFFFFu), seed ^ 0x1u) - 0.5f, j1 = hash_f(int(hole & 0xFFFFu), seed ^ 0x2u) - 0.5f;
+    const float j2 = hash_f(int(hole & 0xFFFFu), seed ^ 0x3u) - 0.5f, j3 = hash_f(int(hole & 0xFFFFu), seed ^ 0x4u) - 0.5f;
+    const float j4 = hash_f(int(hole & 0xFFFFu), seed ^ 0x5u) - 0.5f;
+    const float wa = P[P_PERF_W] + 0.016f * j2, hc = P[P_PERF_H] + 0.016f * j3;
+    const float r = clamp(P[P_PERF_R] + 0.08f * j4, 0.3f, 0.6f);
+    const float sc = ph + k * pitch + 0.5f * P[P_PERF_W] + 0.020f * j0;
+    const float tc = (top ? P[P_PERF_EDGE] + 0.5f * P[P_PERF_H] : W - P[P_PERF_EDGE] - 0.5f * P[P_PERF_H]) + 0.024f * j1;
+    const vec2 q = abs(vec2(st.x - sc, st.y - tc)) - vec2(0.5f * wa - r, 0.5f * hc - r);
+    float d = length(max(q, 0.0f)) + min(max(q.x, q.y), 0.0f) - r;
+    // the punched edge: each hole's own roughness, 1-4 microns
+    const float rough = 0.001f + 0.003f * hash_f(int(hole & 0xFFFFu), seed ^ 0x6u);
+    d += rough * (value_noise(st.x / 0.05f, seed ^ 0x77u) + value_noise(st.y / 0.05f, seed ^ 0x99u) - 1.0f) * 2.0f;
+    // a burr or a chip on about one hole in four: a 20-50 micron bump on the
+    // edge, extending the hole outward at its left short-edge centre
+    if (hash_f(int(hole & 0xFFFFu), seed ^ 0x7u) < 0.25f) {
+        // The owner fixes the film leader at s-: pull contact is the left short-edge centre.
+        const vec2 pb = vec2(sc - 0.5f * wa, tc);
+        const float sig = 0.020f + 0.030f * hash_f(int(hole & 0xFFFFu), seed ^ 0x9u);
+        // Negative signed-distance displacement expands the hole into the film, towards s-.
+        const float amp = -(0.006f + 0.010f * hash_f(int(hole & 0xFFFFu), seed ^ 0xBu));
+        d += amp * exp(-dot(st - pb, st - pb) / (sig * sig));
+    }
+    // Extend the existing Gaussian burr/chip at the sprocket's pull-contact point.
+    // shortcut: dimensions are visual estimates; calibrate against measured negatives for physical claims.
+    const float wear = P[P_SCRATCH_EDGE];
+    const vec2 contact = vec2(sc - 0.5f * wa, tc);
+    const vec2 qwear = st - contact;
+    if (wear > 0.0f && abs(qwear.x) < 0.20f && abs(qwear.y) < 0.18f) {
+        const uint ws = uint(P[P_SCRATCH_SEED]) ^ hole ^ 0xD271u;
+        if (hash_f(0, ws ^ 0x7u) < 0.75f) {
+            const vec2 sig = vec2(0.025f + 0.020f * hash_f(0, ws ^ 0x8u),
+                                  0.035f + 0.040f * hash_f(0, ws ^ 0x9u));
+            const float amp = -wear * (0.015f + 0.035f * hash_f(0, ws ^ 0xBu));
+            const vec2 z = qwear / sig;
+            const float end = 1.0f - smoothstep(0.10f, 0.18f, abs(qwear.y));
+            d += amp * exp(-dot(z,z)) * end *
+                 (0.75f + 0.25f * value_noise(qwear.y / 0.012f, ws ^ 0x77u));
+        }
+    }
+    return d;
+}
+
+// How soft a perforation's edge is in a scan, as the sigma of a Gaussian edge
+// in film millimetres.
+const float kHoleEdgeSigma = 0.017f;
+
+// erf, Abramowitz and Stegun 7.1.26 (|error| < 1.5e-7).
+float erf_as(float x) {
+    const float t = 1.0f / (1.0f + 0.3275911f * abs(x));
+    const float y = 1.0f - (((((1.061405429f * t - 1.453152027f) * t) + 1.421413741f) * t - 0.284496736f) * t + 0.254829592f) * t * exp(-x * x);
+    return x < 0.0f ? -y : y;
+}
+
+// Where there is film: 1 on the strip, 0 in the perforations and past its edges.
+float film_alpha(vec2 st) {
+    const float W = P[P_FILM_W], px = P[P_PX];
+    // (with no carrier the canvas is the film's width, and the film runs on
+    // under the corners a tilted scan carries past its edge)
+    float a = P[P_CARRIER] > 1.5f ? 1.0f : clamp(min(st.y, W - st.y) / px + 0.5f, 0.0f, 1.0f);
+    if (P[P_PERFORATED] > 0.5f) {
+        uint hole;
+        // The hole's edge as the scan resolves it: the measured softness, and
+        // the pixel's own width (a one-pixel ramp is a sigma of 0.31 px), so a
+        // small render is no softer than it was and a large one no harder
+        // than film.
+        const float sigma = sqrt(kHoleEdgeSigma * kHoleEdgeSigma + 0.0961f * px * px);
+        a *= 0.5f + 0.5f * erf_as(perf_sdf(st, hole) / (1.41421356f * sigma));
+    }
+    return a;
+}
+
+// (5) (RFC-032 section 30.5, section 31): the scan's view of the holes. Inside
+// a hole: the picture's own white (holes = white) or a black backing. Around
+// it, the cut wall. Linear output RGB, after the scanner's blur and sharpening.
+void main() {
+    uint i = spk_global_index();
+    if (i >= n[0]) return;
+    const uint cw = uint(P[P_CW]);
+    const vec2 st = canvas_to_film(float(i % cw), float(i / cw));
+    const float a = film_alpha(st);
+    const bool white = P[P_HOLES_LIGHT] > 0.5f;
+    vec3 light = vec3(P[P_LIGHT_R], P[P_LIGHT_G], P[P_LIGHT_B]);
+    vec3 c = vec3(rgb[3u * i], rgb[3u * i + 1u], rgb[3u * i + 2u]);
+    if (P[P_PERFORATED] > 0.5f) {
+        uint hole;
+        const float d = perf_sdf(st, hole);
+        // The cut is not a perfectly vertical knife: the base is a little rounded
+        // where the punch went through, and a scan sees that as a soft shoulder
+        // just outside the hole -- measured on the owner's reference at 1-2 px
+        // of 0.03 mm, lifting the black by ~1-5 % (linear), a faint olive-warm,
+        // and not the same on every side or every hole. Inside, a few edges
+        // carry a faint cream line. Subtle on purpose (RFC-032 section 31.5).
+        const uint seed = uint(P[P_PERF_SEED]);
+        const int h = int(hole & 0xFFFFu);
+        if (d > -0.03f && d < 0.15f) {
+            const float e = 0.003f;
+            uint hh;
+            const vec2 g = vec2(perf_sdf(st + vec2(e, 0.0f), hh) - perf_sdf(st - vec2(e, 0.0f), hh),
+                                perf_sdf(st + vec2(0.0f, e), hh) - perf_sdf(st - vec2(0.0f, e), hh));
+            const vec2 nrm = g / max(length(g), 1e-6f);
+            const vec2 vdir = vec2(P[P_WALL_VS], P[P_WALL_VT]);
+            // how much this stretch of this hole's outline shows: per hole, patchy
+            // along the outline, a little more on the side the scan leans to
+            const float per_hole = 0.4f + 0.6f * hash_f(h, seed ^ 0xE1u);
+            // `patch` is a GLSL reserved keyword (tessellation); renamed patch_f.
+            const float patch_f = smoothstep(0.25f, 0.75f, 0.5f * (value_noise(st.x / 0.35f, seed ^ uint(h)) +
+                                                                   value_noise(st.y / 0.35f, seed ^ uint(h) ^ 0x3Cu)));
+            const float side = 0.6f + 0.8f * max(0.0f, dot(nrm, vdir));
+            const float k = per_hole * patch_f * side;
+            // the base's tint, mostly washed out
+            const vec3 tint = mix(vec3(1.0f), vec3(P[P_BASE_R], P[P_BASE_G], P[P_BASE_B]), 0.3f);
+            const float lam = P[P_WALL_SCATTER];
+            if (P[P_SCRATCH_EDGE] > 0.0f && abs(d) < 0.06f) {
+                const uint ws = uint(P[P_SCRATCH_SEED]) ^ hole ^ 0xC010u;
+                const float patch_f = smoothstep(0.25f, 0.75f, 0.5f * (value_noise(st.x / 0.20f, ws) +
+                                                                               value_noise(st.y / 0.20f, ws ^ 0x33u)));
+                // Existing spectral base transmittance: a narrow absorptive colour mark, not added light.
+                const float amount = 0.65f * P[P_SCRATCH_EDGE] * patch_f * exp(-abs(d) / 0.018f);
+                // `filter` is a GLSL reserved word; renamed filter_c.
+                const vec3 filter_c = mix(vec3(1.0f), clamp(vec3(P[P_BASE_R], P[P_BASE_G], P[P_BASE_B]), 0.01f, 1.0f), amount);
+                // Output-space conversion can leave negative channels; absorption must not lift them.
+                if (d >= 0.0f) c -= max(c, 0.0f) * (1.0f - filter_c);
+                else light *= filter_c;
+            }
+            if (d >= 0.0f) {
+                const float lift = P[P_WALL_GLOW] * k * exp(-d / lam);
+                c += lift * tint * (white ? light : vec3(1.0f));
+            } else if (white && hash_f(h, seed ^ 0xE4u) < 0.5f) {
+                light *= 1.0f - 0.12f * k * (1.0f - tint) * exp(d / 0.012f);
+            }
+        }
+        if (white && d >= 0.0f) {
+            // a faint flare from the hole's light into the film, on some holes
+            const float fl = 0.012f * hash_f(h, seed ^ 0xC4u) * step(0.5f, hash_f(h, seed ^ 0xC5u));
+            c += fl * exp(-d / 0.025f) * light;
+        }
+    }
+    // Past the film's long edges is the scan's carrier, not a hole: black, or
+    // the scan's open light.
+    const float W = P[P_FILM_W], px = P[P_PX];
+    const float on_strip = P[P_CARRIER] > 1.5f ? 1.0f : clamp(min(st.y, W - st.y) / px + 0.5f, 0.0f, 1.0f);
+    const float in_film = on_strip > 0.0f ? a / on_strip : 0.0f;
+    const vec3 r3 = mix(vec3(P[P_CARRIER]), mix(light, c, in_film), on_strip);
+    outp[3u * i] = r3.x;
+    outp[3u * i + 1u] = r3.y;
+    outp[3u * i + 2u] = r3.z;
+}
