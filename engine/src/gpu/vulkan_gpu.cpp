@@ -554,6 +554,21 @@ public:
             infos[i] = {b->handle, 0, VkDeviceSize(b->bytes)};
         }
 
+        /* SPK_TRACE: every dispatch is synchronous (vkQueueSubmit + WaitIdle).
+         * A kernel that never returns looks identical to a dead engine from the
+         * host side -- one silent render timeout.  Emit the pair so the last
+         * "->" without its "<-" names the stalled kernel, and "submit" tells
+         * CPU preparation / pipeline compilation apart from GPU execution. */
+        static const bool trace_dispatch = [] {
+            const char* e = std::getenv("SPK_TRACE");
+            return e != nullptr && *e != '\0';
+        }();
+        if (trace_dispatch) {
+            std::fprintf(stderr, "[spk] -> %s threads=%zu groups=(%zu,%zu)\n",
+                         kernel, n_threads, groups_x, groups_y);
+            std::fflush(stderr);
+        }
+
         std::lock_guard<std::mutex> lock(dispatch_mutex_);
         ComputePipeline* pipeline = get_pipeline(*spec, error);
         if (!pipeline) return false;
@@ -591,6 +606,10 @@ public:
         }
         vkUpdateDescriptorSets(device_, uint32_t(writes.size()), writes.data(), 0, nullptr);
 
+        if (trace_dispatch) {
+            std::fprintf(stderr, "[spk] submit %s\n", kernel);
+            std::fflush(stderr);
+        }
         const bool submitted = submit_sync([&](VkCommandBuffer command) {
                 device_barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
@@ -600,6 +619,10 @@ public:
                 vkCmdDispatch(command, uint32_t(groups_x), uint32_t(groups_y), 1);
             }, "Vulkan compute dispatch", error);
         vkDestroyDescriptorPool(device_, descriptor_pool, nullptr);
+        if (trace_dispatch) {
+            std::fprintf(stderr, "[spk] <- %s\n", kernel);
+            std::fflush(stderr);
+        }
         return submitted;
     }
 
