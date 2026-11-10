@@ -2894,6 +2894,25 @@ std::string Pipeline::overscan_geometry_json() const {
     std::snprintf(buf, sizeof buf, ",\"canvas_w\":%u,\"canvas_h\":%u,\"mm_per_px\":%.9g,\"vertical\":%s,\"format\":\"%s\"",
                   L.canvas_w, L.canvas_h, L.px, L.vertical ? "true" : "false", L.format.c_str());
     s += buf;
+    /* 2026-11-11: the Windows shell pastes its border-off centre render back
+     * into the gate (Mac pasteFotufilmCenter). For 135_full_67 the gate spans
+     * the whole strip, so the paste must skip the perforation holes or it fills
+     * them with picture. Publish the exact layout the shader used: film width,
+     * the perforation grid in film mm, and the phase (which is randomised per
+     * camera -- a hard-coded phase would miss half a hole). Top-level flat keys
+     * keep the shell's simple JSON reader happy. Render output is unchanged;
+     * this only extends the geometry reply. */
+    std::snprintf(buf, sizeof buf, ",\"film_w\":%.9g,\"perforated\":%s",
+                  L.film_w, (L.perforated && L.perf_pitch > 0) ? "true" : "false");
+    s += buf;
+    if (L.perforated && L.perf_pitch > 0) {
+        std::snprintf(buf, sizeof buf,
+            ",\"perf_pitch\":%.9g,\"perf_phase\":%.9g,\"perf_edge\":%.9g"
+            ",\"perf_w\":%.9g,\"perf_h\":%.9g,\"perf_r\":%.9g",
+            L.perf_pitch, L.perf_phase, L.perf_edge,
+            L.perf_w, L.perf_h, L.perf_r);
+        s += buf;
+    }
     std::snprintf(buf, sizeof buf, ",\"gate_mm\":[%.6g,%.6g],\"penumbra_mm\":%.6g,\"gates\":[", L.gate_along, L.gate_across, L.penumbra);
     s += buf;
     const int n = L.pair_adv > 0.0 ? 2 : 1;
