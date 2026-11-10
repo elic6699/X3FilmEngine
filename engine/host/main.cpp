@@ -544,20 +544,35 @@ Json m_open_pixels(const Request& q) {
     const std::string space  = optional_string(q.params, "space", "linear_prophoto");
     if (width <= 0 || height <= 0)
         throw HostError{"bad_request", "width and height are required"};
-    if (format != "rgb16le" || space != "linear_prophoto")
-        throw HostError{"unsupported", "open_pixels supports only rgb16le / linear_prophoto"};
-    const size_t need = size_t(width) * size_t(height) * 3 * 2;
+    /* X3Lumina Windows shell, 2026-11-10: rgb32f = linear ProPhoto IEEE-754
+     * float (LE), 12 B/px. The scene-first shell renders scene-linear floats
+     * that legitimately exceed 1.0; the 16-bit wire quantised/clamped that
+     * headroom away. FloatImage is float internally anyway, so rgb32f is a
+     * straight memcpy — no conversion, no clamp. rgb16le stays for older
+     * shells. */
+    if (format != "rgb16le" && format != "rgb32f")
+        throw HostError{"unsupported", "open_pixels supports only rgb16le / rgb32f (linear_prophoto)"};
+    if (space != "linear_prophoto")
+        throw HostError{"unsupported", "open_pixels supports only linear_prophoto"};
+    const bool f32 = (format == "rgb32f");
+    const size_t need = size_t(width) * size_t(height) * 3 * (f32 ? 4 : 2);
     if (q.payload.size() != need)
-        throw HostError{"bad_request", "payload must be width*height*3*2 bytes of rgb16le"};
+        throw HostError{"bad_request",
+                        "payload must be width*height*3*" + std::string(f32 ? "4" : "2") +
+                            " bytes of " + format};
 
     Decoded d;
     d.frame.width  = uint32_t(width);
     d.frame.height = uint32_t(height);
     d.frame.rgb.resize(size_t(width) * size_t(height) * 3);
-    const uint8_t* p = q.payload.data();
-    for (size_t i = 0; i < d.frame.rgb.size(); ++i) {
-        const uint32_t v = uint32_t(p[2 * i]) | (uint32_t(p[2 * i + 1]) << 8);
-        d.frame.rgb[i] = float(v) / 65535.0f;
+    if (f32) {
+        std::memcpy(d.frame.rgb.data(), q.payload.data(), need);
+    } else {
+        const uint8_t* p = q.payload.data();
+        for (size_t i = 0; i < d.frame.rgb.size(); ++i) {
+            const uint32_t v = uint32_t(p[2 * i]) | (uint32_t(p[2 * i + 1]) << 8);
+            d.frame.rgb[i] = float(v) / 65535.0f;
+        }
     }
     d.probe.width  = d.frame.width;
     d.probe.height = d.frame.height;
