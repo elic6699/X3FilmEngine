@@ -2224,6 +2224,12 @@ spk_status spk_solve(spk_session* session, const char* target, char** out_json) 
         ev_by_method.set("center", Json(evs.center));
         ev_by_method.set("protect_highlights", Json(evs.protect_highlights));
         ev_by_method.set("protect_shadows", Json(evs.protect_shadows));
+        // X3Lumina Windows shell, 2026-11-10: the shell's metering pill
+        // exposes all seven methods, so the solve reports the legacy three
+        // as well (measure_meter_evs already fills them).
+        ev_by_method.set("center_weighted", Json(evs.center_weighted));
+        ev_by_method.set("average", Json(evs.average));
+        ev_by_method.set("median", Json(evs.median));
         metered = true;
     }
     if (want == "filter_pack" || want == "both") {

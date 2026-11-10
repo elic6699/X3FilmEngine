@@ -62,6 +62,16 @@ constexpr double kProtectHighlightsStops = 2.5;
 constexpr double kProtectShadowsStops = 3.5;
 constexpr double kProtectHighlightsClampEv = 3.0;   // EV_h is at least EV_b - 3
 constexpr double kProtectShadowsClampEv = 2.0;      // EV_s is at most EV_b + 2
+// X3Lumina Windows shell, 2026-11-10: the frame now arrives as true
+// scene-linear float (rgb32f wire), and with real linear percentiles the
+// RFC-015 "protect as bounds on balanced" wording degenerates -- on an
+// ordinary frame P99.5 < 1.041 and P5 > 0.016 hold almost always, so both
+// protect modes clamp to exactly `balanced` and the pill does nothing the
+// user can see. Windows gives the two modes their own stance instead: a
+// protect frame is metered one notch off dead centre even when nothing is at
+// risk ("prefer under for highlights, prefer over for shadows"), and the
+// risk term still takes over (up to the same clamps) when it fires.
+constexpr double kProtectBiasEv = 0.35;
 // The floor under the sample before any logarithm: twelve stops below
 // mid-grey, which no real frame's shadow is and every black border is.
 constexpr double kMeterFloor = kMidgray / 4096.0;
@@ -785,17 +795,18 @@ ExposureEvs Pipeline::exposure_evs_from(const std::vector<double>& raw, uint32_t
         }
     out.center = -std::log2(std::exp(weighted / mass) / kMidgray);
 
-    // The protect modes are **bounds on balanced, not meters of their own**:
-    // a frame with nothing at risk comes out at exactly `balanced`, and the
-    // clamps stop one specular highlight, or one black border, from deciding
-    // the exposure. Their percentiles are over every sample — protection is
-    // never trimmed and never centre-weighted (RFC-015 §2.3).
+    // The protect modes meter their own stance (see the kProtectBiasEv note):
+    // the risk term is unchanged from RFC-015 §2.3 -- P99.5 onto the paper
+    // white, P5 onto the shadow floor, percentiles over every sample, never
+    // trimmed and never centre-weighted -- but the idle bound moves one notch
+    // off `balanced` so the two modes are always distinguishable from it and
+    // from each other.
     out.protect_highlights = std::clamp(
         std::log2(kMidgray * std::pow(2.0, kProtectHighlightsStops) / p995),
-        out.balanced - kProtectHighlightsClampEv, out.balanced);
+        out.balanced - kProtectHighlightsClampEv, out.balanced - kProtectBiasEv);
     out.protect_shadows = std::clamp(
         std::log2(kMidgray * std::pow(2.0, -kProtectShadowsStops) / p5),
-        out.balanced, out.balanced + kProtectShadowsClampEv);
+        out.balanced + kProtectBiasEv, out.balanced + kProtectShadowsClampEv);
     return out;
 }
 
