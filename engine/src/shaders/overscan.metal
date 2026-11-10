@@ -32,7 +32,10 @@ enum : uint {
     P_CARRIER = 199,
     P_LEAKS = 200,          // up to 12 x (s, side, amp, sigma_s, sigma_t)
     P_PAIR_ADV = 260,       // > 0: the same gate exposed again this far along (a half-frame pair)
-    P_COUNT = 261
+    // FrameMatter (GPL-3.0-or-later, Copyright 2026 LittleSixNine):
+    // 135 全宽曝光的内部布局标志；只有 135_full_67 为 1，不新增公开参数。
+    P_FULL_WIDTH = 261,
+    P_COUNT = 262
 };
 constant uint kQStride = 10u;
 
@@ -125,6 +128,14 @@ static float penumbra(float d, float r) {
     return 0.5f + (u * sqrt(max(1.0f - u * u, 0.0f)) + asin(u)) * (1.0f / M_PI_F);
 }
 
+// 135 全宽：画面映射到整条片基，没有相机片门上下遮罩；输出就是曝光的
+// 69.5×35 裁幅，两端不再补片间黑。齿孔镂空仍由 film_alpha() 独立处理，
+// 边码仍由 spk_overscan_add_mask() 作为曝光叠加。
+static float exposure_gate_sdf(float2 st, device const float* P) {
+    if (P[P_FULL_WIDTH] > 0.5f) return -1e6f;
+    return gate_sdf(st, P);
+}
+
 static float3 sample_frame(device const float* f, float fx, float fy, uint fw, uint fh) {
     fx = clamp(fx, 0.0f, float(fw) - 1.0f);
     fy = clamp(fy, 0.0f, float(fh) - 1.0f);
@@ -157,7 +168,7 @@ kernel void spk_overscan_canvas(device const float* frame [[buffer(0)]],
         float2 sg = st;
         float shift = 0.0f;
         if (P[P_PAIR_ADV] > 0.0f && st.x > P[P_GS0] + 0.5f * (P[P_GW] + P[P_PAIR_ADV])) { shift = P[P_PAIR_ADV]; sg.x -= shift; }
-        const float cov = penumbra(gate_sdf(sg, P), P[P_PENUMBRA]);
+        const float cov = penumbra(exposure_gate_sdf(sg, P), P[P_PENUMBRA]);
         if (cov > 0.0f) {
             const float px = P[P_PX];
             float fx, fy;
@@ -168,7 +179,7 @@ kernel void spk_overscan_canvas(device const float* frame [[buffer(0)]],
         // Gate flare: the gate's bevelled edge reflects scene light onto the
         // film just outside the frame -- a thin line that follows the scene's
         // brightness along the edge (bright sky, bright line).
-        const float d_gate = gate_sdf(sg, P);
+        const float d_gate = exposure_gate_sdf(sg, P);
         if (P[P_FLARE_AMP] > 0.0f && d_gate > -0.02f && d_gate < 6.0f * P[P_FLARE_WIDTH]) {
             const float px = P[P_PX];
             const float in_s = clamp(sg.x, P[P_GS0] + 0.12f, P[P_GS0] + P[P_GW] - 0.12f) + shift;

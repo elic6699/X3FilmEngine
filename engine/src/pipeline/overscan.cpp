@@ -57,7 +57,10 @@ enum OsP : int {
     P_CARRIER = 199,
     P_LEAKS = 200,          // up to kMaxLeaks x (s, side, amp, sigma_s, sigma_t)
     P_PAIR_ADV = 260,       // > 0: the same gate exposed again this far along (a half-frame pair)
-    P_COUNT = 261
+    // FrameMatter (GPL-3.0-or-later, Copyright 2026 LittleSixNine): 135 全宽曝光。
+    // 内部曝光布局标志，不是新的公开参数；只有 135_full_67 为 1。
+    P_FULL_WIDTH = 261,
+    P_COUNT = 262
 };
 constexpr int kMaxLeaks = 12;
 // How far past each long edge of the film a strip scan reaches, mm.
@@ -118,10 +121,13 @@ constexpr Format kFormats[] = {
     // perforations (66.5 mm) for its 65 mm gate, counted off the perforations
     // (C8), so the 135 phase and advance error hold.
     {"135_xpan", 35.0, 24.0, 65.0, true, "square"},
+    // 135 全宽曝光（FrameMatter）：6×7 宽度的片门把整条 35 mm 片基一次曝光。
+    // 69.5×35 是代表性预设，不是某台相机的实测重建；齿孔片基不变。
+    {"135_full_67", 35.0, 35.0, 69.5, true, "square"},
     {"120_6x12", 61.0, 56.0, 112.0, false, "square"},
     {"120_6x17", 61.0, 56.0, 168.0, false, "square"},
 };
-constexpr const char* kFormatNames = "135, 135_half, 120_645, 120_6x6, 120_6x7, 120_6x8, 120_6x9, 135_xpan, 120_6x12, 120_6x17";
+constexpr const char* kFormatNames = "135, 135_half, 120_645, 120_6x6, 120_6x7, 120_6x8, 120_6x9, 135_xpan, 135_full_67, 120_6x12, 120_6x17";
 constexpr const char* kGateFamilies[] = {"square", "rounded", "eared", "shouldered", "kicked"};
 const Format* find_format(const std::string& name) {
     for (const Format& f : kFormats) if (name == f.name) return &f;
@@ -571,14 +577,19 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
     // Camera centring + weave. A 120 gate sits up to ~0.5 mm off the film's
     // middle (reference_film/120: rebates of 2.26/3.28, 2.48/2.60, 2.51/2.99,
     // 2.4/3.1 and 1.9/2.64 mm); a 135 gate is held by the perforations.
+    const bool full_width = L.format == "135_full_67";
     const double t_off = (fmt->perforated ? rc.uni(-0.10, 0.10) : rc.uni(-0.45, 0.45)) + rf.normal() * 0.025;
-    L.gate_t0 = 0.5 * (L.film_w - L.gate_across) + t_off;
+    // 全宽：片门横跨整条片基，居中且不再抽相机偏心；上下摆动也清零，
+    // 否则画面边缘会露出一角未曝光的楔形。
+    L.gate_t0 = 0.5 * (L.film_w - L.gate_across) + (full_width ? 0.0 : t_off);
     L.gate_s0 = 0.0;
     for (int side = 0; side < 4; ++side)
         for (int k = 0; k < 3; ++k) {
             L.wob_a[side][k] = rc.normal() * 0.012 / double(k + 1);
             L.wob_ph[side][k] = rc.uni(0.0, 2.0 * M_PI);
         }
+    if (full_width)
+        for (auto& side : L.wob_a) for (double& amplitude : side) amplitude = 0.0;
     // The gate sits a fraction of a millimetre in front of the emulsion; its
     // shadow's radius is gap / (2 N). EXIF gives N; f/5.6 when unknown.
     const double gate_gap = rc.uni(0.18, 0.40);
@@ -599,7 +610,8 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
             }
             family = fams[size_t(rg.uni(0.0, double(fams.size()))) % fams.size()];
         }
-        gate_shape(L, family, fmt->perforated, rg);
+        // 全宽曝光没有相机片门：片门形状控件在这一档不参与（片基整幅开放）。
+        if (!full_width) gate_shape(L, family, fmt->perforated, rg);
     }
     L.holes_light = o.holes == "white";
     L.carrier_open = o.carrier == "open";
@@ -639,6 +651,11 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
         margin_along = 0.9 + rf.uni(-0.1, 0.1);
         t_lo = L.gate_t0 - 1.1; t_hi = L.gate_t0 + L.gate_across + 1.1;
     }
+    if (full_width) {
+        // 只输出曝光的 69.5×35 画幅：两端不补片间黑，横跨正好到片基边缘。
+        t_lo = 0.0; t_hi = L.film_w;
+        margin_along = 0.0;
+    }
     const uint32_t m_px = uint32_t(std::lround(margin_along / L.px));
     const uint32_t along_px = uint32_t(L.vertical ? frame_h : frame_w) + 2 * m_px;
     const uint32_t across_px = uint32_t(std::lround((t_hi - t_lo) / L.px));
@@ -657,7 +674,11 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
     const double half_along = 0.5 * along_px * L.px;
     const double tilt_lim = std::min(0.35, std::asin(std::min(1.0, 0.27 / half_along)) * 180.0 / M_PI);
     L.scan_rot = std::clamp(rf.normal() * 0.14, -tilt_lim, tilt_lim) * M_PI / 180.0;
-    const double ds = rf.normal() * 0.08, dt = rf.normal() * 0.06;
+    // 全宽画幅画面一直铺到画布四角；扫描倾斜/随机位移会让角上重新出现
+    // 未曝光的楔形，所以这一档两者都关掉（与 FrameMatter 同口径）。
+    if (full_width) L.scan_rot = 0.0;
+    const double random_ds = rf.normal() * 0.08, random_dt = rf.normal() * 0.06;
+    const double ds = full_width ? 0.0 : random_ds, dt = full_width ? 0.0 : random_dt;
     const double cu = 0.5 * L.canvas_w * L.px, cv = 0.5 * L.canvas_h * L.px;
     const double c = std::cos(L.scan_rot), sn = std::sin(L.scan_rot);
     // canvas (u, v) -> film (s, t): the scan rotation R, then for a vertical film
@@ -793,6 +814,9 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
 void Pipeline::overscan_params_block(std::vector<float>& P) const {
     const OverscanLayout& L = overscan_;
     P.assign(P_COUNT, 0.0f);
+    // 内部曝光布局标志：shader 用它去掉相机片门遮罩，边码仍按既有 add_mask
+    // 路径叠在曝光上，齿孔镂空仍由 film_alpha 处理。
+    P[P_FULL_WIDTH] = L.format == "135_full_67" ? 1.0f : 0.0f;
     P[P_CW] = float(L.canvas_w); P[P_CH] = float(L.canvas_h); P[P_PX] = float(L.px);
     P[P_FW] = float(L.frame_w); P[P_FH] = float(L.frame_h);
     P[P_A00] = float(L.A[0]); P[P_A01] = float(L.A[1]); P[P_A10] = float(L.A[2]); P[P_A11] = float(L.A[3]);
