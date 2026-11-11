@@ -646,11 +646,19 @@ Json m_open_pixels(const Request& q) {
     const std::string space = q.params.has("space") ? q.params.at("space").as_string() : "linear_prophoto";
     if (w <= 0 || h <= 0 || w > 40000 || h > 40000)
         throw HostError{"bad_request", "open_pixels: bad dimensions"};
-    if (format != "rgb16le")
-        throw HostError{"unsupported", "open_pixels: only format 'rgb16le' is supported"};
+    // 2026-11-11 (X3Lumina): `rgb32f` is the float twin of `rgb16le`. Same
+    // space, same byte order, three little-endian float32 per pixel -- but the
+    // samples ARE the linear ProPhoto values, so nothing is quantised and
+    // nothing is clamped: >1.0 headroom and negative components survive into
+    // the engine, which is the whole point (the 16-bit wire cuts both at
+    // px_put / SpkHost). Used by the generic-RAW Core Image decode path, where
+    // Apple's decoder hands us scene-linear floats that already exceed 1.
+    const bool f32 = (format == "rgb32f");
+    if (!f32 && format != "rgb16le")
+        throw HostError{"unsupported", "open_pixels: only formats 'rgb16le' and 'rgb32f' are supported"};
     if (space != "linear_prophoto")
         throw HostError{"unsupported", "open_pixels: only space 'linear_prophoto' is supported"};
-    const size_t expect = size_t(w) * size_t(h) * 3 * 2;
+    const size_t expect = size_t(w) * size_t(h) * 3 * (f32 ? 4 : 2);
     if (q.payload.size() != expect)
         throw HostError{"bad_request", "open_pixels: payload is " +
                         std::to_string(q.payload.size()) + " bytes, expected " + std::to_string(expect)};
@@ -661,14 +669,20 @@ Json m_open_pixels(const Request& q) {
     d.frame.height = uint32_t(h);
     d.frame.rgb.resize(size_t(w) * size_t(h) * 3);
     const uint8_t* src = q.payload.data();
-    for (size_t i = 0; i < d.frame.rgb.size(); ++i) {
-        const uint16_t u = uint16_t(src[2 * i]) | uint16_t(src[2 * i + 1]) << 8;
-        d.frame.rgb[i] = float(u);            // integer code, as decode_tiff stores it
+    if (f32) {
+        // Host and the client are both little-endian; memcpy keeps the float
+        // bit patterns exactly as the caller measured them.
+        std::memcpy(d.frame.rgb.data(), src, expect);
+    } else {
+        for (size_t i = 0; i < d.frame.rgb.size(); ++i) {
+            const uint16_t u = uint16_t(src[2 * i]) | uint16_t(src[2 * i + 1]) << 8;
+            d.frame.rgb[i] = float(u);        // integer code, as decode_tiff stores it
+        }
+        // linear ProPhoto codes -> linear ProPhoto floats. The transform is
+        // identity by matrix but not by bit pattern (invert3 roundtrip), and the
+        // file path goes through it too -- replicate it for parity.
+        codes_to_linear_prophoto(linear_prophoto_space(), d.frame.rgb, 65536);
     }
-    // linear ProPhoto codes -> linear ProPhoto floats. The transform is
-    // identity by matrix but not by bit pattern (invert3 roundtrip), and the
-    // file path goes through it too -- replicate it for parity.
-    codes_to_linear_prophoto(linear_prophoto_space(), d.frame.rgb, 65536);
     d.decode_ms = ms_since(t0);
     d.probe.kind = FileKind::Tiff;            // closest analogue; metadata unknown
 
