@@ -717,6 +717,26 @@ bool Pipeline::legacy_exposure_ev(const std::vector<double>& Y, uint32_t sh, uin
     return true;
 }
 
+/* 测光口径固定为「显示白点 = 1.0」（2026-11-11，X3Lumina float wire 之后）。
+ *
+ * float wire（open_pixels 的 rgb32f）把场景线性原样送进来，>1 的高光余量也在。
+ * 但七个测光方法的阈值全是 16 位钳制时代按「白点 = 1.0」标定的：kMidgray 锚点、
+ * protect 的 +2.5 / −3.5 档、P99.5 分位。一旦 p995 从 1.0 变成 2.8，
+ * protect_highlights 就从「几乎不动作」变成实打实压 1.4 档 —— 整张片被推暗、
+ * 负片密度上移、饱和度明显上升（2026-11-11 用户报「浮点 wire 后饱和度增加
+ * 非常多」）。
+ *
+ * 测光要回答的只是「这张场景有多亮、白点在哪」；>1 的部分对它是不可见的
+ * （相机在 RAW 里本来也裁到白电平）。统计前统一钳到 [kMeterFloor, 1.0]，
+ * 七个方法就回到各自的标定语义，观感与 16 位时代一致。
+ *
+ * 渲染路径不受影响：帧还是未钳的 float，halation / 高光滚降照样看得到 >1。
+ * 需要恢复「HDR 感知」的保护高光时，调用方用 `scene_linear_p995` 显式送
+ * 真实分位（它在钳制之后覆盖，见 exposure_evs_from）。 */
+static void meter_clamp_display_white(std::vector<double>& y) {
+    for (double& v : y) v = std::min(std::max(v, kMeterFloor), 1.0);
+}
+
 ExposureEvs Pipeline::exposure_evs_from(const std::vector<double>& raw, uint32_t sh, uint32_t sw,
                                         double p995_override) {
     const size_t n = raw.size();
@@ -806,6 +826,7 @@ bool Pipeline::measure_exposure_ev(const Image& in, double& ev, std::string& err
     std::vector<double> Y;
     uint32_t sh = 0, sw = 0;
     if (!exposure_sample_y(in, stride, Y, sh, sw, error)) return false;
+    meter_clamp_display_white(Y);
     if (method == "center_weighted" || method == "average" || method == "median")
         return legacy_exposure_ev(Y, sh, sw, method, ev, error);
 
@@ -851,6 +872,7 @@ bool Pipeline::measure_meter_evs(const Image& in, ExposureEvs& out, std::string&
     std::vector<double> Y;
     uint32_t sh = 0, sw = 0;
     if (!exposure_sample_y(framed, /*stride=*/false, Y, sh, sw, error)) return false;
+    meter_clamp_display_white(Y);
     out = exposure_evs_from(Y, sh, sw, params_.camera.scene_linear_p995);
     return legacy_exposure_ev(Y, sh, sw, "center_weighted", out.center_weighted, error) &&
            legacy_exposure_ev(Y, sh, sw, "average", out.average, error) &&
