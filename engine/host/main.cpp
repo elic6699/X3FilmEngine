@@ -397,7 +397,7 @@ Json m_hello(const Request&) {
     r.set("capabilities", std::move(caps));
     Json methods = Json::array();
     for (const char* m : {"hello", "ping", "shutdown", "params_schema", "print_lut_catalog", "memory_report",
-                          "probe", "thumbnail", "decode_raw_frame", "open", "open_pixels", "redecode", "close", "set_params",
+                          "probe", "thumbnail", "decode_raw_frame", "open", "open_pixels", "set_scene_frame", "redecode", "close", "set_params",
                           "get_params", "solve", "render",
                           "scene_latitude", "overscan_geometry", "preview_stock_lut", "cancel", "progress",
                           "export_image", "export_cube", "export_di", "write_image"})
@@ -780,6 +780,38 @@ std::string tier_of(const Json& params, const char* fallback) {
     return tier;
 }
 
+// X3Lumina tier-2: attach the unclipped scene-linear frame to an existing
+// session. Payload is tightly packed little-endian float32 RGB (3 floats per
+// pixel), exactly the format `decode_raw_frame` sends back. NO range clamp,
+// NO codes-to-linear LUT: >1 headroom and negative components survive.
+Json m_set_scene_frame(const Request& q) {
+    auto s = find_session(q.params);
+    const int w = q.params.at("width").as_int(0);
+    const int h = q.params.at("height").as_int(0);
+    if (w <= 0 || h <= 0 || w > 40000 || h > 40000)
+        throw HostError{"bad_request", "set_scene_frame: bad dimensions"};
+    const size_t expect = size_t(w) * h * 3 * sizeof(float);
+    if (q.payload.size() != expect)
+        throw HostError{"bad_request", "set_scene_frame: payload is " +
+                        std::to_string(q.payload.size()) + ", expected " + std::to_string(expect)};
+    std::vector<float> frame(size_t(w) * h * 3);
+    // Byte-wise so the wire contract does not depend on host alignment.
+    const uint8_t* src = q.payload.data();
+    for (size_t i = 0; i < frame.size(); ++i) {
+        const uint32_t bits = uint32_t(src[4 * i]) | uint32_t(src[4 * i + 1]) << 8 |
+                              uint32_t(src[4 * i + 2]) << 16 | uint32_t(src[4 * i + 3]) << 24;
+        uint32_t b = bits;
+        std::memcpy(&frame[i], &b, 4);
+    }
+    const spk_status st = spk_set_scene_frame(s->handle, frame.data(), uint32_t(w), uint32_t(h));
+    if (st != SPK_OK) engine_fail(st, "set_scene_frame");
+    Json r = Json::object();
+    r.set("width", number(w));
+    r.set("height", number(h));
+    r.set("scene_frame_bytes", number(double(expect)));
+    return r;
+}
+
 Json m_render(const Request& q, std::vector<uint8_t>& payload) {
     auto s = find_session(q.params);
     const std::string tier = tier_of(q.params, "preview");
@@ -1078,6 +1110,7 @@ void dispatch(const Request& q) {
     }
     else if (m == "open") result = m_open(q);
     else if (m == "open_pixels") result = m_open_pixels(q);
+    else if (m == "set_scene_frame") result = m_set_scene_frame(q);
     else if (m == "close") result = m_close(q);
     else if (m == "redecode") result = m_redecode(q);
     else if (m == "set_params") result = m_set_params(q);

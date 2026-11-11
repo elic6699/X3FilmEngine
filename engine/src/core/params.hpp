@@ -323,6 +323,15 @@ struct CameraParams {
     /// the reference's own, and it stays: three of the seven names are the
     /// legacy meters, whose arithmetic the parity harnesses pin.
     std::string auto_exposure_method = "center_weighted";
+    /// Scene-linear latitude sideband (X3Lumina, 2026-11-11). The 16-bit
+    /// `open_pixels` wire clamps the frame to [0,1], so the meter cannot see
+    /// the >1 headroom the engine's EDR / halation / protect_highlights are
+    /// calibrated for. A caller that still has the unclipped float frame can
+    /// send its P99.5 and whole-frame maximum here, in **linear ProPhoto**
+    /// units (the same units `kMidgray` is in). -1 means "not supplied" and
+    /// leaves every existing path bit-for-bit unchanged.
+    double scene_linear_p995 = -1.0;
+    double scene_linear_frame_max = -1.0;
     double lens_blur_um = 0.0;
     double film_format_mm = 35.0;
     double filter_uv[3] = {0.0, 410.0, 8.0};

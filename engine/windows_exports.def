@@ -8,6 +8,7 @@ EXPORTS
     spk_warm_up
     spk_open
     spk_open_device
+    spk_set_scene_frame
     spk_set_params
     spk_get_params
     spk_solve

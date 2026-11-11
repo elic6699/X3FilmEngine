@@ -202,6 +202,21 @@ spk_session* spk_open(spk_engine* engine, const spk_image* input,
 spk_session* spk_open_device(spk_engine* engine, const spk_device_image* input,
                              const char* params_delta_json, char** out_json);
 
+/* X3Lumina tier-2 (2026-11-11): a SECOND frame for the same session, holding
+ * the unclipped scene-linear pixels that `spk_open`'s [0,1] wire could not
+ * carry. Tightly packed float32 RGB, row-major, in the same linear ProPhoto
+ * space as `spk_open`'s decoded samples. Values above 1.0 and negative
+ * components are legal and are NOT clamped here.
+ *
+ * This frame is never fed to the LOOK / density LUT chain -- that chain keeps
+ * reading `spk_open`'s original `source`, so the film response stays exactly
+ * as calibrated. The engine uses it only for the latitude operators that work
+ * in stops (per-pixel highlight headroom, and hence halation's blur input).
+ * Optional: without this call the render is bit-for-bit what it always was.
+ * The engine copies what it keeps; `rgb` need only live for this call. */
+spk_status spk_set_scene_frame(spk_session* session, const float* rgb,
+                               uint32_t width, uint32_t height);
+
 /* `out_json` receives `{"invalidated": ..., "params": {...}}`. */
 spk_status spk_set_params(spk_session* session, const char* params_delta_json,
                           char** out_json);

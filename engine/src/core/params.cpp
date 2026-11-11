@@ -209,6 +209,14 @@ const SchemaField kFields[] = {
     // back-reflection halo only (a film with no anti-halation layer). Native
     // only, SHOOT, after `camera_filter`. Every film with a layer ignores it.
     {"halation_headroom_ev",     "film_render.halation.headroom_ev",      F, SHOOT, true, 0.0, 8.0, false},
+    // Scene-linear latitude sideband (X3Lumina, 2026-11-11). Native only,
+    // after `halation_headroom_ev` and still before `preview_long_edge` so
+    // `parity_schema.py`'s NATIVE_ONLY insertion order stays the same. SHOOT:
+    // both feed the meter / the negative's exposure, not the print. -1 is the
+    // "not supplied" sentinel, hence the range starts there; with no sideband
+    // the engine reads exactly the frame it always did.
+    {"scene_linear_p995",        "camera.scene_linear_p995",              F, SHOOT, true, -1.0, 65536.0, false},
+    {"scene_linear_frame_max",   "camera.scene_linear_frame_max",         F, SHOOT, true, -1.0, 65536.0, false},
     // The app's *preview resolution*: the `live` tier's long edge, and so the
     // size every interactive edit renders at. PRINT layer, because it is a
     // decision about the canvas rather than about the film -- but it is one of
@@ -230,6 +238,8 @@ const SchemaField* find_field(const std::string& name) {
 
 double* float_slot(Params& p, const std::string& path) {
     if (path == "camera.exposure_compensation_ev") return &p.camera.exposure_compensation_ev;
+    if (path == "camera.scene_linear_p995") return &p.camera.scene_linear_p995;
+    if (path == "camera.scene_linear_frame_max") return &p.camera.scene_linear_frame_max;
     if (path == "camera.film_format_mm") return &p.camera.film_format_mm;
     if (path == "camera.lens_blur_um") return &p.camera.lens_blur_um;
     if (path == "film_render.halation.halation_amount") return &p.film_render.halation.halation_amount;

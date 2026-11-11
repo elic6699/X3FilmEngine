@@ -338,6 +338,15 @@ public:
     // rebuilt pipeline cannot miss either.
     void set_source_long_edge(uint32_t long_edge, uint32_t frame_long_edge);
 
+    // X3Lumina tier-2: the optional second frame (unclipped scene-linear).
+    // A counted handle, so this is cheap to call before every film run; a
+    // rebuilt pipeline after `spk_set_params` therefore cannot lose it.
+    // Passing an invalid Image clears the side channel.
+    void set_scene_frame(const Image& frame) {
+        scene_frame_ = frame;
+        has_scene_frame_ = frame.valid();
+    }
+
     // `Tap.RGB_IN` -> `Tap.CMY_FILM`. `out` is the developed negative.
     bool run_film(const Image& in, Image& out, Progress* progress, std::string& error);
     // `Tap.CMY_FILM` -> `Tap.RGB_OUT`.
@@ -567,6 +576,11 @@ public:
 private:
     struct Timer;
 
+    // X3Lumina tier-2: unclipped scene-linear frame, never written to the
+    // LOOK chain. Only `node_headroom` reads it, and only when present.
+    Image scene_frame_;
+    bool has_scene_frame_ = false;
+
     // The meter's sample: the frame strided down, read back, and turned into
     // luminance by the auto-exposure Y row. Shared so the three legacy meters
     // and the four intents cannot disagree about what they are metering.
@@ -577,7 +591,8 @@ private:
     static bool legacy_exposure_ev(const std::vector<double>& Y, uint32_t sh, uint32_t sw,
                                    const std::string& method, double& ev, std::string& error);
     // RFC-015 §2.3's four intents, from one sample.
-    static ExposureEvs exposure_evs_from(const std::vector<double>& Y, uint32_t sh, uint32_t sw);
+    static ExposureEvs exposure_evs_from(const std::vector<double>& Y, uint32_t sh, uint32_t sw,
+                                         double p995_override = -1.0);
 
     /// The film side split at the one place the strips can cut it. The prefix
     /// is everything that must see the whole plane -- `geometry` changes the

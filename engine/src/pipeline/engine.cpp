@@ -87,6 +87,10 @@ constexpr const char* kMeterKeyFields[] = {
     "input_color_space", "input_cctf_decoding",
     "geometry_crop_x", "geometry_crop_y", "geometry_crop_w", "geometry_crop_h",
     "geometry_rotation_deg", "geometry_quarter_turns", "geometry_flip_h", "geometry_flip_v",
+    // Scene-linear latitude sideband: a set_params that changes these must
+    // re-meter, otherwise the cached EV would still describe the old frame
+    // while node_headroom already reads the new clip (X3Lumina, 2026-11-11).
+    "scene_linear_p995", "scene_linear_frame_max",
 };
 
 // The hard cap on a frame's size, as a **pixel count** rather than a
@@ -242,6 +246,12 @@ struct spk_session {
     // RFC-024: the last field `spk_contrast_mask_field` returned. The caller's
     // pointer is into this, valid until the next call on the session.
     std::vector<float> mask_field;
+
+    // X3Lumina tier-2: the optional unclipped scene-linear frame. Kept as a
+    // counted BufferRef beside `source`; it is never written into the LOOK
+    // chain, only read by `Pipeline::node_headroom`.
+    Image scene_frame;
+    bool has_scene_frame = false;
 
     std::mutex lock;
     Progress progress;
@@ -982,6 +992,34 @@ spk_session* spk_open_device(spk_engine* engine, const spk_device_image* input,
     return open_frame(engine, frame, params_delta_json, out_json);
 }
 
+/* X3Lumina tier-2. Upload the unclipped scene-linear frame as a SECOND Image
+ * on this session. `spk_image` is already float32 with no range contract, so
+ * >1 and negatives go through untouched; there is deliberately no
+ * codes-to-linear LUT here (that LUT is what clamps the 16-bit wire). */
+spk_status spk_set_scene_frame(spk_session* session, const float* rgb,
+                               uint32_t width, uint32_t height) {
+    if (!session || !rgb || !width || !height) {
+        g_error = "set_scene_frame: session, pixels and dimensions are required";
+        return SPK_ERR_INVALID_ARG;
+    }
+    std::lock_guard<std::mutex> guard(session->lock);
+    g_error.clear();
+    const size_t bytes = size_t(width) * height * 3 * sizeof(float);
+    std::string error;
+    session->engine->gpu->begin_frame();
+    gpu::BufferRef buf = session->engine->gpu->upload_file_backed(rgb, bytes, error);
+    session->engine->gpu->end_frame();
+    if (!buf) { g_error = error; return SPK_ERR_GPU; }
+    Image img;
+    img.buf = buf;
+    img.w = width;
+    img.h = height;
+    img.c = 3;
+    session->scene_frame = img;
+    session->has_scene_frame = true;
+    return SPK_OK;
+}
+
 namespace {
 
 // The source at a tier's resolution, built on first use. `open` needs the live
@@ -1065,6 +1103,10 @@ bool ensure_meter(spk_session* session, std::string& error) {
 // anything -- and one call site each, so the graph cannot drift between them.
 bool run_film_for(spk_session* session, const Image& source, Image& negative,
                   Progress* progress, std::string& error) {
+    // X3Lumina tier-2: re-attach on every film run. `spk_set_params` can
+    // replace the Pipeline object, and the setter is just a BufferRef copy.
+    if (session->has_scene_frame)
+        session->pipeline->set_scene_frame(session->scene_frame);
     if (session->params.settings.striped) {
         return session->pipeline->run_film_striped(source, negative, progress, error);
     }

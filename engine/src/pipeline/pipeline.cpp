@@ -717,7 +717,8 @@ bool Pipeline::legacy_exposure_ev(const std::vector<double>& Y, uint32_t sh, uin
     return true;
 }
 
-ExposureEvs Pipeline::exposure_evs_from(const std::vector<double>& raw, uint32_t sh, uint32_t sw) {
+ExposureEvs Pipeline::exposure_evs_from(const std::vector<double>& raw, uint32_t sh, uint32_t sw,
+                                        double p995_override) {
     const size_t n = raw.size();
     // `n - 1` below is unsigned; an empty sample has no exposure to report,
     // and the reference's own all-black answer is 0 EV.
@@ -738,7 +739,16 @@ ExposureEvs Pipeline::exposure_evs_from(const std::vector<double>& raw, uint32_t
         std::nth_element(sorted.begin(), sorted.begin() + k, sorted.end());
         return sorted[k];
     };
-    const double p1 = rank(10), p5 = rank(50), p99 = rank(990), p995 = rank(995);
+    const double p1 = rank(10), p5 = rank(50), p99 = rank(990);
+    double p995 = rank(995);
+    // Scene-linear latitude sideband (X3Lumina, 2026-11-11). The 16-bit wire
+    // cannot carry >1, so a frame whose highlights were clipped arrives with
+    // p995 <= 1 and RFC-015's protect threshold (kMidgray*2^2.5 = 1.041) can
+    // never fire. A caller holding the unclipped float frame sends its own Y
+    // P99.5 here. The four rank() calls above -- and the nth_element state
+    // they leave in `sorted` -- are deliberately untouched: with the default
+    // -1 this function is bit-for-bit what it always was.
+    if (p995_override >= 0.0) p995 = p995_override;
 
     ExposureEvs out;
     // The trim set: P(1)..P(99) inclusive, by rank. The log mean is what a
@@ -802,7 +812,7 @@ bool Pipeline::measure_exposure_ev(const Image& in, double& ev, std::string& err
     // One sample, four answers. The node only needs the session's own intent,
     // and computing all four costs one extra log2 and a clamp next to the
     // readback that produced `Y`.
-    const ExposureEvs evs = exposure_evs_from(Y, sh, sw);
+    const ExposureEvs evs = exposure_evs_from(Y, sh, sw, params_.camera.scene_linear_p995);
     if (method == "balanced") ev = evs.balanced;
     else if (method == "center") ev = evs.center;
     else if (method == "protect_highlights") ev = evs.protect_highlights;
@@ -841,7 +851,7 @@ bool Pipeline::measure_meter_evs(const Image& in, ExposureEvs& out, std::string&
     std::vector<double> Y;
     uint32_t sh = 0, sw = 0;
     if (!exposure_sample_y(framed, /*stride=*/false, Y, sh, sw, error)) return false;
-    out = exposure_evs_from(Y, sh, sw);
+    out = exposure_evs_from(Y, sh, sw, params_.camera.scene_linear_p995);
     return legacy_exposure_ev(Y, sh, sw, "center_weighted", out.center_weighted, error) &&
            legacy_exposure_ev(Y, sh, sw, "average", out.average, error) &&
            legacy_exposure_ev(Y, sh, sw, "median", out.median, error);
@@ -960,16 +970,103 @@ bool Pipeline::node_boost(const Image& in, Image& out, std::string& error) {
 // frame; and before `film_overscan`, because the edge print, fog and date are
 // exposures the engine knows exactly and must halate at what they are. Only
 // for a film with no layer: every other film is what it always was.
+// C++ twin of `spk_smoothstep01` in nodes.metal. Only the tier-2 scene-frame
+// path reaches it; the default render keeps the GPU kernel's arithmetic.
+static double headroom_smoothstep01(double t) {
+    t = std::clamp(t, 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
 bool Pipeline::node_headroom(const Image& in, Image& out, std::string& error) {
     const HalationParams& hal = params_.film_render.halation;
-    if (!(hal.active && hal.back_reflection && hal.headroom_ev > 0.0 && hal.halation_amount > 0.0 &&
+    // The stock `back_reflection` gate below is only true for a film tagged
+    // `antihalation: no`; every profile in the current resource set is
+    // strong/weak, so headroom never ran on the default path. A caller that
+    // supplied a real scene frame has the information that gate was standing
+    // in for, so the tier-2 path is allowed through independently of it.
+    // Without a scene frame this predicate is byte-for-byte the original one.
+    if (!has_scene_frame_ &&
+        !(hal.active && hal.back_reflection && hal.headroom_ev > 0.0 && hal.halation_amount > 0.0 &&
           hal.headroom_to_ev > hal.headroom_from_ev)) {
         out = in;
         return true;
     }
     Timer t(this, "filming.expose.headroom");
+
+    // X3Lumina tier-2 (2026-11-11): drive the headroom gain per pixel from
+    // the UNCLIPPED scene-linear frame. The LOOK chain still reads the same
+    // 16-bit codes (`in`); only this node's gain changes. `spk_mul` is already
+    // in the baked metallib, so this needs no shader change. Off by default:
+    // without a scene frame every line below is the original implementation.
+    //
+    // This also fixes tier-1's scalar defect: a stage-1 frame maximum was
+    // being handed to the stage-4 shader as `clip`, which could gate headroom
+    // OFF for a bright frame. Here the true frame is gain-aligned to the main
+    // chain before the stops arithmetic, so `m/clip` stays scale-free.
+    if (has_scene_frame_) {
+        if (!(hal.headroom_ev > 0.0 && hal.headroom_to_ev > hal.headroom_from_ev)) {
+            out = in;   // the stock gate would have opted out too
+            return true;
+        }
+        double clip_main = 0.0;
+        if (!device_max(in, clip_main, error)) return false;
+        if (!(clip_main > 0.0)) { out = in; return true; }
+        std::vector<float> scene;
+        if (!read_back(scene_frame_, scene, error)) return false;
+        const size_t sp = scene_frame_.pixels();
+        if (scene.size() < sp * 3) { error = "scene frame payload too small"; return false; }
+        double clip_true = 0.0;
+        for (size_t i = 0; i < sp; ++i)
+            clip_true = std::fmax(clip_true, double(std::fmax(
+                scene[3 * i], std::fmax(scene[3 * i + 1], scene[3 * i + 2]))));
+        if (!(clip_true > 0.0)) { out = in; return true; }
+        const double gain = clip_main / clip_true;
+        const double log2_inv_clip = std::log2(1.0 / clip_main);
+        const double log2_inv_mid = std::log2(1.0 / kMidgray);
+        const double clip_from = kHeadroomClipFromEv;
+        const double clip_span = 1.0 / (kHeadroomClipToEv - kHeadroomClipFromEv);
+        const double floor_from = hal.headroom_from_ev;
+        const double floor_span = 1.0 / (hal.headroom_to_ev - hal.headroom_from_ev);
+        std::vector<float> g(in.elements());
+        for (uint32_t y = 0; y < in.h; ++y) {
+            const uint32_t sy = std::min<uint32_t>(scene_frame_.h - 1,
+                uint32_t(uint64_t(y) * scene_frame_.h / in.h));
+            for (uint32_t x = 0; x < in.w; ++x) {
+                const uint32_t sx = std::min<uint32_t>(scene_frame_.w - 1,
+                    uint32_t(uint64_t(x) * scene_frame_.w / in.w));
+                const size_t s = (size_t(sy) * scene_frame_.w + sx) * 3;
+                const float m = std::fmax(scene[s], std::fmax(scene[s + 1], scene[s + 2]));
+                float gg = 1.0f;
+                if (m > 0.0f) {
+                    const double lm = std::log2(double(m) * gain);
+                    const double nc = headroom_smoothstep01((lm + log2_inv_clip - clip_from) * clip_span);
+                    const double of = headroom_smoothstep01((lm + log2_inv_mid - floor_from) * floor_span);
+                    gg = float(std::exp2(hal.headroom_ev * nc * of));
+                }
+                const size_t d = (size_t(y) * in.w + x) * 3;
+                g[d] = g[d + 1] = g[d + 2] = gg;
+            }
+        }
+        gpu::BufferRef gbuf = gpu_->upload(g.data(), g.size() * sizeof(float), error);
+        if (!gbuf) return false;
+        if (!alloc_like(in, out, error)) return false;
+        const uint32_t n[1] = {uint32_t(in.elements())};
+        return gpu_->dispatch("spk_mul",
+                              {gpu::Arg::buf(in.buf), gpu::Arg::buf(gbuf),
+                               gpu::Arg::inline_bytes(n, 1), gpu::Arg::buf(out.buf)},
+                              in.elements(), error);
+    }
+
     double clip = 0.0;
-    if (!device_max(in, clip, error)) return false;
+    // Scene-linear latitude sideband (X3Lumina, 2026-11-11). `clip` is the
+    // frame's own maximum in stops, and a [0,1] wire pins it at 1. A caller
+    // with the unclipped float frame supplies the real maximum; that also
+    // skips one GPU reduction + flush. Default -1 keeps the original path.
+    if (params_.camera.scene_linear_frame_max >= 0.0) {
+        clip = params_.camera.scene_linear_frame_max;
+    } else if (!device_max(in, clip, error)) {
+        return false;
+    }
     if (!(clip > 0.0)) { out = in; return true; }
     const float p[7] = {float(1.0 / clip), float(kHeadroomClipFromEv),
                         float(1.0 / (kHeadroomClipToEv - kHeadroomClipFromEv)),

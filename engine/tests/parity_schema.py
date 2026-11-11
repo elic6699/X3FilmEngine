@@ -331,6 +331,18 @@ NATIVE_ONLY = {
         "path": "film_render.halation.headroom_ev", "type": "float", "layer": "shoot",
         "default": 4.0, "live": False, "range": [0.0, 8.0],
     },
+    # Scene-linear latitude sideband (X3Lumina, 2026-11-11). The 16-bit wire
+    # clamps the frame to [0,1]; these two let a caller that still holds the
+    # unclipped float frame feed the meter and headroom clip their true values.
+    # -1 = not supplied, so the reference's default renders are unchanged.
+    "scene_linear_p995": {
+        "path": "camera.scene_linear_p995", "type": "float", "layer": "shoot",
+        "default": -1.0, "live": False, "range": [-1.0, 65536.0],
+    },
+    "scene_linear_frame_max": {
+        "path": "camera.scene_linear_frame_max", "type": "float", "layer": "shoot",
+        "default": -1.0, "live": False, "range": [-1.0, 65536.0],
+    },
 }
 
 
