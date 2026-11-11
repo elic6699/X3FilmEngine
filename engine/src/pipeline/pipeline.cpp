@@ -742,6 +742,27 @@ bool Pipeline::legacy_exposure_ev(const std::vector<double>& Y, uint32_t sh, uin
     return true;
 }
 
+/* X3Lumina Windows, 2026-11-11: meter against a display white of 1.0.
+ *
+ * The shell now feeds the engine through `open_pixels`' rgb32f wire, so the
+ * sample carries the real scene-linear frame -- highlights above 1.0 and all.
+ * But every threshold of the seven metering methods was calibrated when the
+ * wire was 16-bit and the sample was clipped at white: the kMidgray anchor,
+ * protect's +2.5 / -3.5 zones and the P99.5 rank. Once p995 goes from 1.0 to
+ * 2.8, protect_highlights stops being a bound and turns into a real 1.4-stop
+ * pull -- the whole frame darkens, negative density moves up and saturation
+ * climbs. The meter only has to answer "how bright is this scene, where is
+ * white"; anything above 1.0 is invisible to that question (the camera clips
+ * at white level in the raw data too). Clamping the sample to
+ * [kMeterFloor, 1.0] puts all seven methods back on their calibrated
+ * semantics, bit-compatible with what the 16-bit wire produced.
+ *
+ * Rendering is unaffected: the frame stays unclipped float, so halation and
+ * the highlight roll-off still see above 1.0. */
+static void meter_clamp_display_white(std::vector<double>& y) {
+    for (double& v : y) v = std::min(std::max(v, kMeterFloor), 1.0);
+}
+
 ExposureEvs Pipeline::exposure_evs_from(const std::vector<double>& raw, uint32_t sh, uint32_t sw) {
     const size_t n = raw.size();
     // `n - 1` below is unsigned; an empty sample has no exposure to report,
@@ -822,6 +843,7 @@ bool Pipeline::measure_exposure_ev(const Image& in, double& ev, std::string& err
     std::vector<double> Y;
     uint32_t sh = 0, sw = 0;
     if (!exposure_sample_y(in, stride, Y, sh, sw, error)) return false;
+    meter_clamp_display_white(Y);
     if (method == "center_weighted" || method == "average" || method == "median")
         return legacy_exposure_ev(Y, sh, sw, method, ev, error);
 
@@ -867,6 +889,7 @@ bool Pipeline::measure_meter_evs(const Image& in, ExposureEvs& out, std::string&
     std::vector<double> Y;
     uint32_t sh = 0, sw = 0;
     if (!exposure_sample_y(framed, /*stride=*/false, Y, sh, sw, error)) return false;
+    meter_clamp_display_white(Y);
     out = exposure_evs_from(Y, sh, sw);
     return legacy_exposure_ev(Y, sh, sw, "center_weighted", out.center_weighted, error) &&
            legacy_exposure_ev(Y, sh, sw, "average", out.average, error) &&
