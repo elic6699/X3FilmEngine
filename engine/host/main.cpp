@@ -505,7 +505,29 @@ spk_session* engine_open(const FloatImage& frame, const std::string& delta, Json
     const auto t1 = Clock::now();
     spk_image image{frame.rgb.data(), frame.width, frame.height, 3};
     char* reply = nullptr;
-    spk_session* handle = spk_open(g.engine, &image, delta.empty() ? nullptr : delta.c_str(), &reply);
+    // X3Lumina is the *product* (not the upstream reference / parity client), so
+    // it requests the product defaults via `product_defaults`. The single change
+    // that makes today is `enlarger.print_exposure_compensation = false` (see
+    // apply_product_defaults and printing.cpp). That is exactly what lets the
+    // Camera / Film-Exposure slider move the *finished print* instead of only the
+    // negative's placement on the film curve: without it the print re-applies a
+    // gain that cancels the `exposure_compensation_ev` the slider injects, so the
+    // image only shifts colour/contrast and reads as "grayer" -- the regression
+    // this fixes. `product_defaults` is stripped from the delta by spk_open
+    // before validation, so it never collides with a real render parameter.
+    std::string effective = delta;
+    if (!effective.empty()) {
+        std::string perr;
+        Json d;
+        if (Json::parse(effective, d, perr) && d.is_object())
+            d.set("product_defaults", Json(true));
+        else
+            d = Json::object();
+        effective = d.dump();
+    } else {
+        effective = "{\"product_defaults\":true}";
+    }
+    spk_session* handle = spk_open(g.engine, &image, effective.c_str(), &reply);
     if (!handle) {
         if (reply) spk_string_free(reply);
         throw HostError{"engine_error", std::string("open: ") + spk_last_error(g.engine)};
