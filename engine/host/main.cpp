@@ -453,8 +453,10 @@ DecodeOptions decode_options(const Json& decode) {
     if (decode.is_null()) return options;
     if (!decode.is_object()) throw HostError{"bad_request", "decode must be an object"};
     options.raw_mode = optional_string(decode, "raw_mode", "compatible16");
-    if (options.raw_mode != "compatible16" && options.raw_mode != "headroom")
-        throw HostError{"bad_request", "decode.raw_mode must be compatible16 or headroom"};
+    if (options.raw_mode != "compatible16" && options.raw_mode != "headroom" &&
+        options.raw_mode != "mono")
+        throw HostError{"bad_request",
+                        "decode.raw_mode must be compatible16, headroom or mono"};
     for (const auto& kv : decode.fields()) {
         if (kv.first == "raw_mode") continue;
         if (kv.first == "white_balance") {

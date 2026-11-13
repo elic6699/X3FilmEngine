@@ -58,7 +58,7 @@ struct Rgba8 {
 
 // The frame the engine develops: linear ProPhoto, orientation applied.
 struct DecodeOptions {
-    std::string raw_mode = "compatible16";   // or "headroom"
+    std::string raw_mode = "compatible16";   // or "headroom" / "mono"
     // R2: a custom white balance at decode (RAW, compatible16 only).
     std::optional<double> temperature_k, tint;
 };

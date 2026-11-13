@@ -84,6 +84,17 @@ bool decode_raw_compatible(const std::filesystem::path& source,
 bool decode_raw_compatible(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
                            DecodedRaw& out, std::string& error);
 
+// Monochrome sensor bypass (X3Lumina 2026-11-13): no demosaic, no white
+// balance and no colour matrix. Reads the unpacked single-channel sensor
+// samples and replicates each as neutral R=G=B so the existing frame
+// contract (w*h*3 float, linear) is unchanged. Below-black negatives and
+// above-white highlights are NOT clamped. The CALLER decides whether the
+// file is a true monochrome sensor -- including CFA-removed conversions
+// whose metadata still claims colors=3 / RGBG -- so this function does no
+// sensor detection whatsoever.
+bool decode_raw_monochrome(const std::filesystem::path& source,
+                           DecodedRaw& out, std::string& error);
+
 // Experimental expanded-output policy for conventional three-colour Bayer
 // RAW only. As-shot WB is normalised by its largest multiplier (highlight=1)
 // before uint16 AHD demosaicing. LibRaw's actual ProPhoto matrix is evaluated

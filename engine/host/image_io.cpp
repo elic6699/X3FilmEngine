@@ -782,7 +782,9 @@ bool probe_file(const fs::path& path, Probe& out, std::string& error) {
 bool decode_linear_prophoto(const fs::path& path, const DecodeOptions& options, FloatImage& out,
                             Probe& probe, std::string& error) {
     if (!probe_file(path, probe, error)) return false;
-    const bool custom_wb = options.temperature_k.has_value();
+    // mono deliberately ignores white balance: there is no CFA to balance.
+    const bool custom_wb = options.temperature_k.has_value() &&
+                           options.raw_mode != "mono";
     if (custom_wb && probe.kind != FileKind::Raw) {
         error = std::string(kUnsupportedPrefix) + "white balance at decode applies to RAW files only";
         return false;
@@ -804,7 +806,10 @@ bool decode_linear_prophoto(const fs::path& path, const DecodeOptions& options, 
         }
         const bool ok = options.raw_mode == "headroom"
                             ? spk::io::decode_raw_headroom(path, decoded, error)
-                            : spk::io::decode_raw_compatible(path, custom_wb ? &mul : nullptr, decoded, error);
+                            : options.raw_mode == "mono"
+                                ? spk::io::decode_raw_monochrome(path, decoded, error)
+                                : spk::io::decode_raw_compatible(
+                                      path, custom_wb ? &mul : nullptr, decoded, error);
         if (!ok) return false;
         out.width = decoded.width;
         out.height = decoded.height;

@@ -327,6 +327,113 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
     }
 }
 
+// Monochrome sensor bypass. The caller has already decided the file has no
+// CFA (factory monochrome bodies AND CFA-removed conversions alike; the latter
+// still advertise colors=3 / RGBG, which is exactly why detection is left to
+// the user). dcraw_process()/dcraw_make_mem_image() are intentionally skipped:
+// they would demosaic, apply WB and run a colour matrix over data that is
+// already a complete luminance sample at every pixel.
+bool decode_raw_monochrome(const std::filesystem::path& source,
+                           DecodedRaw& out, std::string& error) {
+    error.clear();
+    const auto total_start = Clock::now();
+    try {
+        if (source.empty()) {
+            error = "RAW mono: source path is empty";
+            return false;
+        }
+        auto raw = std::make_unique<LibRaw>(LIBRAW_OPTIONS_NO_DATAERR_CALLBACK);
+        auto start = Clock::now();
+        const int open_status = raw->open_file(source.c_str());
+        const double open_ms = elapsed_ms(start);
+        if (!libraw_ok(open_status, "RAW mono open", error)) return false;
+        if (!supported_compression(*raw, error)) return false;
+
+        start = Clock::now();
+        const int unpack_status = raw->unpack();
+        const double unpack_ms = elapsed_ms(start);
+        if (!libraw_ok(unpack_status, "RAW mono unpack", error)) return false;
+        if (raw->error_count() != 0) {
+            error = "RAW mono unpack: decoder reported corrupt data";
+            return false;
+        }
+
+        const auto& data = raw->imgdata;
+        const auto& sizes = data.sizes;
+        // rawdata.color is the saved pre-postprocess copy (see
+        // capture_source_metadata). No capture_source_metadata() call here: it
+        // requires a valid three-channel camera WB, which monochrome bodies do
+        // not necessarily provide.
+        const auto& color = data.rawdata.color;
+        const unsigned short* src = data.rawdata.raw_image;
+        if (!src) {
+            error = "RAW mono: no unpacked single-channel sensor data "
+                    "(raw_image unavailable)";
+            return false;
+        }
+        const std::uint32_t rw = sizes.raw_width, rh = sizes.raw_height;
+        const std::uint32_t w = sizes.width, h = sizes.height;
+        const std::uint32_t top = sizes.top_margin, left = sizes.left_margin;
+        if (w == 0 || h == 0 || rw == 0 || rh == 0 ||
+            std::uint64_t(top) + h > rh || std::uint64_t(left) + w > rw) {
+            error = "RAW mono: inconsistent sensor dimensions";
+            return false;
+        }
+        const double black = double(color.black) + double(color.cblack[0]);
+        double white = double(color.maximum);
+        if (white <= black) white = 65535.0;
+        // Preserve below-black negatives and above-white highlights: no clamp.
+        // The downstream C pipeline works in double and keeps out-of-range
+        // linear headroom; cutting it here would violate the wide-gamut rule.
+        const double scale = 1.0 / std::max(white - black, 1.0);
+
+        DecodedRaw decoded;
+        decoded.width = w;
+        decoded.height = h;
+        decoded.rgb.resize(std::size_t(w) * h * 3);
+        for (std::uint32_t y = 0; y < h; ++y) {
+            const unsigned short* row =
+                src + (std::size_t(top + y) * rw + left);
+            for (std::uint32_t x = 0; x < w; ++x) {
+                const float v = static_cast<float>(
+                    (double(row[x]) - black) * scale);
+                const std::size_t i = (std::size_t(y) * w + x) * 3;
+                decoded.rgb[i] = v;
+                decoded.rgb[i + 1] = v;
+                decoded.rgb[i + 2] = v;
+            }
+        }
+        // LibRaw's dcraw_make_mem_image() would apply sizes.flip; we bypass
+        // that stage. Monochrome conversions in the field report flip=0, but
+        // record the value so a future rotation can be added without guessing.
+        decoded.metadata.raw_flip = sizes.flip;
+        decoded.metadata.libraw_version = LibRaw::version();
+        decoded.metadata.make.assign(data.idata.make,
+            std::find(std::begin(data.idata.make), std::end(data.idata.make), '\0'));
+        decoded.metadata.model.assign(data.idata.model,
+            std::find(std::begin(data.idata.model), std::end(data.idata.model), '\0'));
+        if (const char* name = raw->unpack_function_name())
+            decoded.metadata.decoder_name = name;
+        decoded.metadata.black = color.black;
+        decoded.metadata.white_level = color.maximum;
+        decoded.metadata.sizes_before_postprocess = {
+            sizes.raw_width, sizes.raw_height, sizes.width, sizes.height,
+            sizes.iwidth, sizes.iheight, sizes.top_margin, sizes.left_margin,
+            sizes.pixel_aspect};
+        decoded.timings.open_ms = open_ms;
+        decoded.timings.unpack_ms = unpack_ms;
+        decoded.timings.total_ms = elapsed_ms(total_start);
+        out = std::move(decoded);
+        return true;
+    } catch (const std::exception& exception) {
+        error = std::string("RAW mono decode: ") + exception.what();
+        return false;
+    } catch (...) {
+        error = "RAW mono decode: unknown decoder exception";
+        return false;
+    }
+}
+
 bool decode_raw_headroom(const std::filesystem::path& source,
                          DecodedRaw& out, std::string& error) {
     error.clear();
