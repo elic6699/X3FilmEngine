@@ -12,6 +12,7 @@
 // second implementation of any of it.
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -32,6 +33,7 @@
 
 #include "image_io.hpp"
 #include "json.hpp"
+#include "lensfun_correction.hpp"
 #include "output.hpp"
 #include "platform.hpp"
 #include "spektrafilm/spk_engine.h"
@@ -366,7 +368,7 @@ Json m_hello(const Request&) {
     r.set("capabilities", std::move(caps));
     Json methods = Json::array();
     for (const char* m : {"hello", "ping", "shutdown", "params_schema", "print_lut_catalog", "memory_report",
-                          "probe", "thumbnail", "open", "open_pixels", "redecode", "close", "set_params", "get_params", "solve", "render",
+                          "probe", "thumbnail", "decode_raw_frame", "open", "open_pixels", "redecode", "close", "set_params", "get_params", "solve", "render",
                           "scene_latitude", "overscan_geometry", "preview_stock_lut", "cancel", "progress",
                           "export_image", "export_cube", "export_di", "write_image"})
         methods.push(str(m));
@@ -437,10 +439,11 @@ DecodeOptions decode_options(const Json& decode) {
             options.temperature_k = t;
             options.tint = tint;
         } else if (kv.first == "lens_correction") {
-            // LibRaw carries no lens profiles (Core Image reads the maker's
-            // own correction data; nothing portable here does).
-            if (kv.second.as_bool(false))
-                throw HostError{"unsupported", "lens correction at decode is not available in this host"};
+            // Lensfun replaces Core Image's vendor lens profiles on Windows.
+            // Applied to the decoded linear frame after LibRaw; see
+            // lensfun_correction.cpp. Missing database/profile is a no-op,
+            // reported in the decode_raw_frame result.
+            options.lens_correction = kv.second.as_bool(false);
         } else {
             throw HostError{"unsupported", "decode." + kv.first + " is not supported by this host"};
         }
@@ -825,6 +828,161 @@ void shrink_to(std::vector<float>& lin, uint32_t& w, uint32_t& h, uint32_t long_
     w = dw; h = dh;
 }
 
+/* Linear ProPhoto (LibRaw output_color=4) -> sRGB-encoded RGB24 / RGBA8.
+ * The 3x3 is the numerical inverse of the C core's kSRGBToProPhoto and is
+ * byte-for-byte the matrix the macOS GenericRAW.decode uses
+ * (GenericRAW.swift:244-248). Gain stays 1.0, matching the neutral chain.
+ * A 64K-entry TRC LUT keeps the full-frame conversion cheap. */
+static void linear_prophoto_to_srgb8(const std::vector<float>& lin,
+                                     uint32_t w, uint32_t h,
+                                     std::vector<uint8_t>& rgb8,
+                                     std::vector<uint8_t>* rgba8)
+{
+    static const double m[9] = {
+         2.0341864, -0.7273632, -0.3068354,
+        -0.2286284,  1.2315863, -0.0029359,
+        -0.0085190, -0.1532727,  1.1616103
+    };
+    static const std::vector<uint8_t> trc = [] {
+        std::vector<uint8_t> t(65536);
+        for (int i = 0; i < 65536; ++i) {
+            double v = double(i) / 65535.0;
+            double e = v <= 0.0031308 ? 12.92 * v
+                                      : 1.055 * std::pow(v, 1.0 / 2.4) - 0.055;
+            t[i] = uint8_t(std::lround(std::min(1.0, std::max(0.0, e)) * 255.0));
+        }
+        return t;
+    }();
+    const size_t n = std::min(lin.size() / 3, size_t(w) * h);
+    rgb8.assign(n * 3, 0);
+    if (rgba8) rgba8->assign(n * 4, 255);
+    for (size_t i = 0; i < n; ++i) {
+        const double r = lin[i * 3], g = lin[i * 3 + 1], b = lin[i * 3 + 2];
+        for (int c = 0; c < 3; ++c) {
+            double v = m[c * 3] * r + m[c * 3 + 1] * g + m[c * 3 + 2] * b;
+            v = std::min(1.0, std::max(0.0, v));
+            uint8_t q = trc[uint16_t(v * 65535.0 + 0.5)];
+            rgb8[i * 3 + c] = q;
+            if (rgba8) (*rgba8)[i * 4 + c] = q;
+        }
+    }
+}
+
+/* Generic RAW frame export (LibRaw only, no engine session).
+ *
+ * This is the Windows counterpart of macOS host's decode_raw_frame: the shell
+ * owns the neutral display chain, so the host returns a linear ProPhoto
+ * float32 frame rather than opening a SpektraLab session. X3F/X3I stay on the
+ * X3FCore path in the shell and are explicitly rejected here.
+ *
+ * params:
+ *   path            source file (UTF-8)
+ *   decode          {raw_mode, lens_correction}
+ *   long_edge       downsample before correction (0 = full size)
+ *   output          "rgb_f32le" (default) | "rgba8" | "jpeg"
+ *   quality         JPEG quality when output=jpeg (default 92)
+ * result.format / color_space follow `output`; payload is the corresponding
+ * byte stream. `jpeg` encodes inside the host, so a 100 MP export never
+ * pushes a 1 GB float frame across the pipe.
+ */
+Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
+    const fs::path path = utf8_path(require_string(q.params, "path"));
+    /* long_edge is a TOP-LEVEL key: decode_options() rejects unknown keys
+       inside `decode`, exactly as the macOS host does. */
+    const uint32_t long_edge = uint32_t(std::max(0, q.params.at("long_edge").as_int(0)));
+    const DecodeOptions options = decode_options(q.params.at("decode"));
+    const std::string output = optional_string(q.params, "output", "rgb_f32le");
+    if (output != "rgb_f32le" && output != "rgba8" && output != "jpeg")
+        throw HostError{"bad_request", "output must be rgb_f32le, rgba8 or jpeg"};
+    const int quality = std::min(100, std::max(1, q.params.at("quality").as_int(92)));
+
+    const std::string ext = [&] {
+        std::string e = path_utf8(path.extension());
+        for (char& c : e) c = char(std::tolower(static_cast<unsigned char>(c)));
+        return e;
+    }();
+    if (ext == ".x3f" || ext == ".x3i")
+        throw HostError{"unsupported", "decode_raw_frame is for camera RAW, not X3F/X3I"};
+
+    Decoded d = decode_frame(path, options);   // LibRaw, no need_engine()
+    if (d.probe.kind != FileKind::Raw)
+        throw HostError{"unsupported", "decode_raw_frame only accepts camera RAW files"};
+
+    /* Shrink BEFORE lens correction: a preview of a 100 MP frame then costs
+       ~20 MB of payload and a few ms of correction instead of ~1 GB. */
+    shrink_to(d.frame.rgb, d.frame.width, d.frame.height, long_edge);
+
+    LensCorrectionInfo lc;
+    apply_lensfun(d.frame, d.probe.metadata, g.resources,
+                  options.lens_correction, lc);
+
+    const uint32_t w = d.frame.width, h = d.frame.height;
+    const size_t pixels = size_t(w) * h;
+    if (d.frame.rgb.size() < pixels * 3)
+        throw HostError{"engine_error", "decoded frame size mismatch"};
+
+    std::string format, color_space;
+    double row_bytes = 0;
+    if (output == "rgb_f32le") {
+        /* Legacy/debug path: the shell wants the raw linear ProPhoto float
+           frame. It must not be used for full-res previews of large RAWs. */
+        format = "rgb_f32le";
+        color_space = "linear_prophoto";
+        row_bytes = double(w) * 12;
+        payload.resize(pixels * 3 * 4);
+        std::memcpy(payload.data(), d.frame.rgb.data(), pixels * 3 * 4);
+    } else {
+        std::vector<uint8_t> rgb8, rgba8;
+        if (output == "jpeg") {
+            linear_prophoto_to_srgb8(d.frame.rgb, w, h, rgb8, nullptr);
+        } else {
+            linear_prophoto_to_srgb8(d.frame.rgb, w, h, rgb8, &rgba8);
+            format = "rgba8";
+            color_space = "sRGB";
+            row_bytes = double(w) * 4;
+            payload = std::move(rgba8);
+        }
+        if (output == "jpeg") {
+            std::vector<uint8_t> icc;
+            std::string error;
+            if (!icc_for(engine_space_name("sRGB"), g.resources, icc, error))
+                throw HostError{"io_error", error};
+            const Exif exif = exif_of(d.probe.metadata);
+            if (!encode_jpeg(rgb8.data(), w, h, quality, icc, payload, error, &exif))
+                throw HostError{"io_error", error};
+            format = "jpeg";
+            color_space = "sRGB";
+        }
+    }
+
+    Json r = Json::object();
+    r.set("width", number(w));
+    r.set("height", number(h));
+    r.set("format", str(format));
+    r.set("color_space", str(color_space));
+    if (row_bytes > 0) r.set("row_bytes", number(row_bytes));
+    r.set("bytes", number(double(payload.size())));
+    r.set("orientation_applied", Json(true));
+    r.set("kind", str(kind_name(d.probe.kind)));
+    r.set("metadata", metadata_json(d.probe.metadata));
+    r.set("decode_ms", number(d.decode_ms));
+    r.set("long_edge_applied", Json(long_edge > 0));
+
+    Json lens = Json::object();
+    lens.set("available", Json(lensfun_database_available(g.resources)));
+    lens.set("requested", Json(lc.requested));
+    lens.set("supported", Json(lc.supported));
+    lens.set("applied", Json(lc.applied));
+    lens.set("flags", number(lc.flags));
+    lens.set("ms", number(lc.ms));
+    if (!lc.camera.empty()) lens.set("camera", str(lc.camera));
+    if (!lc.lens.empty())   lens.set("lens", str(lc.lens));
+    if (!lc.focal.empty())  lens.set("focal", str(lc.focal));
+    if (!lc.reason.empty()) lens.set("reason", str(lc.reason));
+    r.set("lens_correction", std::move(lens));
+    return r;
+}
+
 Json written(const fs::path& path, uint32_t w, uint32_t h, size_t bytes, const std::string& space) {
     Json r = Json::object();
     r.set("path", str(path_utf8(path)));
@@ -970,6 +1128,7 @@ void dispatch(const Request& q) {
     else if (m == "memory_report") result = m_memory_report(q);
     else if (m == "probe") result = m_probe(q);
     else if (m == "thumbnail") result = m_thumbnail(q, payload);
+    else if (m == "decode_raw_frame") result = m_decode_raw_frame(q, payload);
     else if (m == "open") result = m_open(q);
     else if (m == "open_pixels") result = m_open_pixels(q);
     else if (m == "close") result = m_close(q);

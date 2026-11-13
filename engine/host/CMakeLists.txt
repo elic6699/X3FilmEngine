@@ -2,6 +2,7 @@
 add_executable(spektralab-host
     main.cpp
     image_io.cpp
+    lensfun_correction.cpp
     output.cpp
     platform.cpp
     stb_impl.cpp
@@ -15,6 +16,9 @@ target_include_directories(spektralab-host PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../src"
     "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/stb")
 target_link_libraries(spektralab-host PRIVATE spk_image_io spk_libraw spektralab_engine spektralab_core)
+if(WIN32)
+    target_link_libraries(spektralab-host PRIVATE spk_lensfun)
+endif()
 if(DEFINED SPEKTRALAB_HOST_VERSION)
     target_compile_definitions(spektralab-host PRIVATE SPEKTRALAB_HOST_VERSION="${SPEKTRALAB_HOST_VERSION}")
 endif()

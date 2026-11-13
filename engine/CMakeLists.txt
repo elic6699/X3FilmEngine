@@ -174,6 +174,15 @@ if(NOT APPLE)
                     target_link_options(spk_raw_render PRIVATE -municode)
                 endif()
             endif()
+            # Lensfun 0.3.4: camera/lens correction for the generic-RAW path.
+            # Windows-only: the official sources are compiled against a Win32
+            # GLib shim (third_party/lensfun_shim/), so no extra DLLs ship.
+            # Non-Windows host builds use the no-op fallback in
+            # host/lensfun_correction.cpp and still link.
+            if(WIN32)
+                include(cmake/Lensfun.cmake)
+            endif()
+
             if(SPEKTRALAB_BUILD_HOST)
                 add_subdirectory(host)
             endif()

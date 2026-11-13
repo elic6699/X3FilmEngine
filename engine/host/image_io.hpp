@@ -61,6 +61,9 @@ struct DecodeOptions {
     std::string raw_mode = "compatible16";   // or "headroom"
     // R2: a custom white balance at decode (RAW, compatible16 only).
     std::optional<double> temperature_k, tint;
+    // Generic RAW only: rectify distortion / TCA / vignetting with Lensfun
+    // after LibRaw decode. Ignored by the engine session (X3F/film) path.
+    bool lens_correction = false;
 };
 // Thrown as a plain error string prefixed "unsupported:" when a decode option
 // cannot be honoured for this file.
