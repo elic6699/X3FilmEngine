@@ -868,6 +868,108 @@ static void linear_prophoto_to_srgb8(const std::vector<float>& lin,
     }
 }
 
+/* ─── 通用 RAW 影调阶段（与 X3F 同一套数学，live.js 的 transform() 是引擎真值）──
+ * 曝光 = 线性光域乘 2^ev（ProPhoto 线性域，sRGB 编码前）；
+ * 对比度 = logit 域陡度 2^(c/2)；饱和度 = Rec.601 亮度拉开色差（u=1+0.5s）；
+ * 阴影/高光 = Rec.709 分区幂曲线（exp2(-2v)，高光压暗侧只有 1/4 强度）。
+ * WB 已在 decode（custom_wb）施加，这里不再重复。零值 = 中性直通。 */
+struct ToneP { double exposure = 0, contrast = 0, saturation = 0, shadow = 0, highlight = 0; };
+static bool toneIsIdentity(const ToneP& t) {
+    return t.exposure == 0 && t.contrast == 0 && t.saturation == 0 &&
+           t.shadow == 0 && t.highlight == 0;
+}
+
+/* 线性 ProPhoto（3ch，可越界）→ sRGB 浮点 0..1（与 linear_prophoto_to_srgb8
+ * 的矩阵 + sRGB OETF 同公式；零回归的「全 0 影调」路径仍走原函数，不进这里）。 */
+static void linear_prophoto_to_srgb_float(const std::vector<float>& lin, uint32_t w, uint32_t h,
+                                          std::vector<float>& srgb) {
+    static const double m[9] = {
+         2.0341864, -0.7273632, -0.3068354,
+        -0.2286284,  1.2315863, -0.0029359,
+        -0.0085190, -0.1532727,  1.1616103
+    };
+    const size_t n = std::min(lin.size() / 3, size_t(w) * h);
+    srgb.assign(n * 3, 0.0f);
+    for (size_t i = 0; i < n; ++i) {
+        const double r = lin[i * 3], g = lin[i * 3 + 1], b = lin[i * 3 + 2];
+        for (int c = 0; c < 3; ++c) {
+            double v = m[c * 3] * r + m[c * 3 + 1] * g + m[c * 3 + 2] * b;
+            v = std::min(1.0, std::max(0.0, v));
+            double e = v <= 0.0031308 ? 12.92 * v : 1.055 * std::pow(v, 1.0 / 2.4) - 0.055;
+            srgb[i * 3 + c] = float(std::min(1.0, std::max(0.0, e)));
+        }
+    }
+}
+
+/* 把 sRGB 浮点 0..1 量化成 8-bit（rgb8 / 可选 rgba8，alpha=255）。 */
+static void srgb_float_to_bytes(const std::vector<float>& srgb, uint32_t w, uint32_t h,
+                                std::vector<uint8_t>& rgb8, std::vector<uint8_t>* rgba8) {
+    const size_t n = std::min(srgb.size() / 3, size_t(w) * h);
+    rgb8.assign(n * 3, 0);
+    if (rgba8) rgba8->assign(n * 4, 255);
+    for (size_t i = 0; i < n; ++i) {
+        for (int c = 0; c < 3; ++c) {
+            double v = double(srgb[i * 3 + c]);
+            int q = int(std::lround(std::min(1.0, std::max(0.0, v)) * 255.0));
+            rgb8[i * 3 + c] = uint8_t(q);
+            if (rgba8) (*rgba8)[i * 4 + c] = uint8_t(q);
+        }
+    }
+}
+
+/* 在 sRGB 显示域施加对比度 / 饱和度 / 阴影 / 高光（exposure 已作为线性增益在
+ * 调用方先乘好）。就地修改 srgb（0..1 浮点）。 */
+static void apply_tone_srgb(std::vector<float>& s, uint32_t w, uint32_t h, const ToneP& t) {
+    const double k   = std::pow(2.0, 0.5 * t.contrast);    // 对比度 logit 陡度
+    const double u   = 1.0 + 0.5 * t.saturation;           // 饱和度
+    const double eSh = std::pow(2.0, -2.0 * t.shadow);     // 阴影分区幂
+    double eHl = -t.highlight;                             // 高光：正 = 压暗（SPP 负向）
+    if (eHl < 0) eHl *= 0.25;                             // 压暗侧只有 1/4 强度
+    eHl = std::pow(2.0, -2.0 * eHl);
+    const size_t n = std::min(s.size() / 3, size_t(w) * h);
+    for (size_t i = 0; i < n; ++i) {
+        double r = s[i * 3], g = s[i * 3 + 1], b = s[i * 3 + 2];
+        /* 1) 对比度：logit 域斜率乘子，端点 0/1 不动点 */
+        if (t.contrast != 0) {
+            for (int c = 0; c < 3; ++c) {
+                double v = s[i * 3 + c];
+                if (v > 0.0 && v < 1.0) {
+                    double ln = std::log(v / (1.0 - v));
+                    s[i * 3 + c] = float(1.0 / (1.0 + std::exp(-k * ln)));
+                }
+            }
+        }
+        /* 2) 饱和度：Rec.601 亮度为中心拉开色差（保亮度 → 可叠加） */
+        if (t.saturation != 0) {
+            double y6 = 0.299 * r + 0.587 * g + 0.114 * b;
+            s[i * 3]     = float(y6 + (s[i * 3]     - y6) * u);
+            s[i * 3 + 1] = float(y6 + (s[i * 3 + 1] - y6) * u);
+            s[i * 3 + 2] = float(y6 + (s[i * 3 + 2] - y6) * u);
+            r = s[i * 3]; g = s[i * 3 + 1]; b = s[i * 3 + 2];
+        }
+        /* 3) 阴影/高光：Rec.709 显示亮度分区幂曲线，按 Y'/Y 同比缩放 RGB
+         *    （只在 0..25% / 75%..100% 段内动，中间调不洗）。 */
+        if (t.shadow != 0 || t.highlight != 0) {
+            double y7 = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            double y2 = y7;
+            if (t.shadow != 0 && y7 > 0.0 && y7 < 0.25)
+                y2 = 0.25 * std::pow(y7 / 0.25, eSh);
+            if (t.highlight != 0 && y7 > 0.75 && y7 < 1.0)
+                y2 = 0.75 + 0.25 * std::pow((y7 - 0.75) / 0.25, eHl);
+            if (y2 != y7 && y7 > 1e-9) {
+                double sc = y2 / y7;
+                s[i * 3]     *= float(sc);
+                s[i * 3 + 1] *= float(sc);
+                s[i * 3 + 2] *= float(sc);
+            }
+        }
+        for (int c = 0; c < 3; ++c) {
+            double v = double(s[i * 3 + c]);
+            s[i * 3 + c] = v < 0 ? 0.0f : (v > 1 ? 1.0f : s[i * 3 + c]);
+        }
+    }
+}
+
 /* Generic RAW frame export (LibRaw only, no engine session).
  *
  * This is the Windows counterpart of macOS host's decode_raw_frame: the shell
@@ -895,6 +997,17 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
     if (output != "rgb_f32le" && output != "rgba8" && output != "jpeg")
         throw HostError{"bad_request", "output must be rgb_f32le, rgba8 or jpeg"};
     const int quality = std::min(100, std::max(1, q.params.at("quality").as_int(92)));
+
+    /* 通用 RAW 影调阶段参数（与 X3F 同一套数学）。缺 develop 对象时全 0 = 中性直通。 */
+    ToneP tone;
+    if (q.params.has("develop")) {
+        const Json dev = q.params.at("develop");
+        tone.exposure   = dev.at("exposure").as_double(0.0);
+        tone.contrast   = dev.at("contrast").as_double(0.0);
+        tone.saturation = dev.at("saturation").as_double(0.0);
+        tone.shadow     = dev.at("shadow").as_double(0.0);
+        tone.highlight  = dev.at("highlight").as_double(0.0);
+    }
 
     const std::string ext = [&] {
         std::string e = path_utf8(path.extension());
@@ -933,14 +1046,35 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
         std::memcpy(payload.data(), d.frame.rgb.data(), pixels * 3 * 4);
     } else {
         std::vector<uint8_t> rgb8, rgba8;
-        if (output == "jpeg") {
-            linear_prophoto_to_srgb8(d.frame.rgb, w, h, rgb8, nullptr);
+        if (toneIsIdentity(tone)) {
+            if (output == "jpeg") {
+                linear_prophoto_to_srgb8(d.frame.rgb, w, h, rgb8, nullptr);
+            } else {
+                linear_prophoto_to_srgb8(d.frame.rgb, w, h, rgb8, &rgba8);
+                format = "rgba8";
+                color_space = "sRGB";
+                row_bytes = double(w) * 4;
+                payload = std::move(rgba8);
+            }
         } else {
-            linear_prophoto_to_srgb8(d.frame.rgb, w, h, rgb8, &rgba8);
-            format = "rgba8";
-            color_space = "sRGB";
-            row_bytes = double(w) * 4;
-            payload = std::move(rgba8);
+            /* 曝光为线性增益（ProPhoto 线性域，sRGB 编码前），随后转 sRGB 浮点
+             * 再施加对比度 / 饱和度 / 阴影 / 高光。WB 已在 decode 的 custom_wb 完成。 */
+            std::vector<float> lin = d.frame.rgb;
+            if (tone.exposure != 0.0) {
+                const double g = std::pow(2.0, tone.exposure);
+                for (float& v : lin) v = float(v * g);
+            }
+            std::vector<float> srgb;
+            linear_prophoto_to_srgb_float(lin, w, h, srgb);
+            apply_tone_srgb(srgb, w, h, tone);
+            srgb_float_to_bytes(srgb, w, h, rgb8,
+                                output == "jpeg" ? nullptr : &rgba8);
+            if (output != "jpeg") {
+                format = "rgba8";
+                color_space = "sRGB";
+                row_bytes = double(w) * 4;
+                payload = std::move(rgba8);
+            }
         }
         if (output == "jpeg") {
             std::vector<uint8_t> icc;
