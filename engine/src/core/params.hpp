@@ -380,7 +380,14 @@ struct CameraParams {
 struct EnlargerParams {
     std::string illuminant = "TH-KG3";
     double print_exposure = 1.0;
-    bool print_exposure_compensation = true;
+    // 印相曝光补偿：true 时印相阶段会把 camera.exposure_compensation_ev 反算进
+    // 印相增益（printing.cpp:172-184），与负片阶段 node_exposure 的 2^EV 恰好抵消
+    // ——「胶片曝光」滑杆因此净效果≈0，拉到最暗只剩自动测光后的灰片（Windows 实测）。
+    // Mac 版之所以能看出曝光变化，是它那版引擎只部分抵消；本仓库的 v1.3.7 印相
+    // 抵消更彻底。此处默认改 false：负片 2^EV 不再被印相吃掉，滑杆恢复成真正的
+    // 胶片曝光（密度/对比/饱和随 EV 走）。EV=0 时 factor_comp==factor_midgray，
+    // 真/假两种取值输出逐位相同，故只影响滑杆非零时的观感，不影响默认成片。
+    bool print_exposure_compensation = false;
     bool normalize_print_exposure = true;
     double y_filter_shift = 0.0, m_filter_shift = 0.0;
     // What one unit of the two shifts is, in the head's own CC units. 1 is
