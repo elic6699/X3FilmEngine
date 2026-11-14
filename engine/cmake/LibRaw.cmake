@@ -20,6 +20,21 @@ target_include_directories(spk_libraw PUBLIC "${SPEKTRALAB_LIBRAW_SOURCE}")
 target_compile_definitions(spk_libraw PUBLIC LIBRAW_NODLL PRIVATE LIBRAW_NOTHREADS)
 target_compile_features(spk_libraw PUBLIC cxx_std_11)
 set_target_properties(spk_libraw PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# 2026-11-14: AHD / X-Trans 去马赛克是通用 RAW 链里最贵的一段。LibRaw 自带
+# tile 级 OpenMP（src/demosaic/ahd_demosaic.cpp、xtrans_demosaic.cpp 的
+# `#pragma omp parallel for schedule(dynamic)`，还有 raw2image / postprocessing_aux），
+# 但只有编译器开了 /openmp 才会定义 _OPENMP，libraw_types.h 依赖它自动
+# define LIBRAW_USE_OPENMP；不开就整段退化成单线程（之前一直是单线程）。
+# 全幅 7968x5320 AHD 单线程约 8.6 s，这里是主要瓶颈。
+find_package(OpenMP QUIET COMPONENTS CXX)
+if(OpenMP_CXX_FOUND)
+    target_compile_options(spk_libraw PRIVATE ${OpenMP_CXX_FLAGS})
+    target_link_libraries(spk_libraw PUBLIC OpenMP::OpenMP_CXX)
+    message(STATUS "LibRaw: OpenMP demosaic enabled (${OpenMP_CXX_FLAGS})")
+else()
+    message(STATUS "LibRaw: OpenMP not found, demosaic stays single-threaded")
+endif()
 if(WIN32)
     target_link_libraries(spk_libraw PUBLIC ws2_32)
 else()
