@@ -435,6 +435,23 @@ public:
         for (uint32_t x : {num, den}) for (int i = 0; i < 4; ++i) v.push_back(uint8_t(x >> (8 * i)));
         add(tag, 5, 1, v);
     }
+    // DNG 的 AsShotNeutral / ColorMatrix1 要多个 RATIONAL / 带负号的 SRATIONAL。
+    void rationals(uint16_t tag, const std::vector<std::pair<uint32_t, uint32_t>>& values) {
+        std::vector<uint8_t> v;
+        for (const auto& p : values)
+            for (uint32_t x : {p.first, p.second})
+                for (int i = 0; i < 4; ++i) v.push_back(uint8_t(x >> (8 * i)));
+        add(tag, 5, uint32_t(values.size()), v);
+    }
+    void srationals(uint16_t tag, const std::vector<std::pair<int32_t, int32_t>>& values) {
+        std::vector<uint8_t> v;
+        for (const auto& p : values) {
+            const uint32_t words[2] = {uint32_t(p.first), uint32_t(p.second)};
+            for (uint32_t x : words) for (int i = 0; i < 4; ++i) v.push_back(uint8_t(x >> (8 * i)));
+        }
+        add(tag, 10, uint32_t(values.size()), v);
+    }
+    void bytes(uint16_t tag, const std::vector<uint8_t>& v) { add(tag, 1, uint32_t(v.size()), v); }
     void undefined(uint16_t tag, const std::vector<uint8_t>& bytes) { add(tag, 7, uint32_t(bytes.size()), bytes); }
     // A LONG whose value is filled in by `serialize`'s caller (sub-IFD and
     // strip offsets); returns a handle to `patch`.
@@ -585,6 +602,94 @@ bool encode_tiff(const void* rgb, uint32_t w, uint32_t h, uint32_t bits, const s
             out[start + 2 * i] = uint8_t(src[i]);
             out[start + 2 * i + 1] = uint8_t(src[i] >> 8);
         }
+    }
+    return true;
+}
+
+/* ── 通用相机 RAW 的 DNG 出口（LinearRaw，3 通道 16 位线性 ProPhoto）──────
+ * 与 TIFF 的区别只在 IFD 标签：PhotometricInterpretation=34892 (LinearRaw)、
+ * 一组 DNG 标定标签，以及不带 ICC（DNG 用 ColorMatrix 描述相机色彩空间）。
+ * ColorMatrix1 按 DNG 规范是 XYZ(D50) → 相机参考值，这里给的是 ProPhoto→XYZ
+ * 标准矩阵的逆（分母 1e6 的 SRATIONAL）。CalibrationIlluminant1=20 (D50)。
+ * 数据是已 demosaic、已施加 as-shot WB 的线性 RGB，AsShotNeutral=1:1:1、
+ * WhiteLevel=65535、BlackLevel=0，所以任何读 LinearRaw 的软件拿到的都是
+ * 与预览同一份白平衡的线性底片（观感参数不进文件，和 X3F 的 DNG 同口径）。 */
+bool encode_dng(const uint16_t* rgb, uint32_t w, uint32_t h,
+                const std::string& camera_model, const Exif* exif_fields_in,
+                std::vector<uint8_t>& out, std::string& error) {
+    if (!rgb || !w || !h) { error = "DNG: empty image"; return false; }
+    const uint64_t row_bytes = uint64_t(w) * 3 * 2;
+    const uint64_t image_bytes = row_bytes * h;
+    if (image_bytes > 0xF0000000ull) { error = "DNG: image too large for a classic TIFF container"; return false; }
+    const uint32_t rows_per_strip = uint32_t(std::max<uint64_t>(
+        1, std::min<uint64_t>(h, (1u << 20) / std::max<uint64_t>(1, row_bytes))));
+    const uint32_t strips = (h + rows_per_strip - 1) / rows_per_strip;
+    std::vector<uint32_t> counts(strips);
+    for (uint32_t s = 0; s < strips; ++s)
+        counts[s] = uint32_t(row_bytes * std::min(rows_per_strip, h - s * rows_per_strip));
+
+    /* XYZ(D50) → ProPhoto RGB（ProPhoto→XYZ 的逆），分母 1e6。 */
+    static const double cm[9] = {
+         1.3457989731028281, -0.25558010007999134, -0.05110628506753401,
+        -0.5446224939028347,  1.5082327413132781,  0.020536032051479633,
+         0.0,                 0.0,                 1.2119675456389454
+    };
+    std::vector<std::pair<int32_t, int32_t>> matrix;
+    for (double v : cm) matrix.push_back({int32_t(std::lround(v * 1000000.0)), 1000000});
+
+    IfdBuilder ifd, exif;
+    ifd.longs(254, {0});                       // NewSubfileType: 主图
+    ifd.longs(256, {w});
+    ifd.longs(257, {h});
+    ifd.shorts(258, {16, 16, 16});
+    ifd.shorts(259, {1});                      // 无压缩
+    ifd.shorts(262, {34892});                  // LinearRaw
+    const size_t offsets = ifd.placeholder(273, strips);
+    ifd.shorts(274, {1});
+    ifd.shorts(277, {3});                      // RGB 三通道
+    ifd.longs(278, {rows_per_strip});
+    ifd.longs(279, counts);
+    ifd.rational(282, 72, 1);
+    ifd.rational(283, 72, 1);
+    ifd.shorts(284, {1});
+    ifd.shorts(296, {2});
+    ifd0_fields(ifd, exif_fields_in);
+    ifd.bytes(50706, {1, 4, 0, 0});            // DNGVersion 1.4.0.0
+    ifd.bytes(50707, {1, 1, 0, 0});            // DNGBackwardVersion 1.1.0.0
+    ifd.ascii(50708, camera_model.empty() ? "X3Lumina Generic RAW" : camera_model);
+    ifd.shorts(50714, {0, 0, 0});              // BlackLevel
+    ifd.longs(50717, {65535});                 // WhiteLevel
+    ifd.srationals(50721, matrix);             // ColorMatrix1
+    ifd.rationals(50728, {{1, 1}, {1, 1}, {1, 1}});  // AsShotNeutral
+    ifd.srationals(50730, {{0, 1}});           // BaselineExposure = 0
+    ifd.shorts(50778, {20});                   // CalibrationIlluminant1 = D50
+    size_t exif_pointer = 0;
+    if (exif_fields_in) {
+        exif_pointer = ifd.placeholder(34665, 1);
+        exif_fields(exif, *exif_fields_in, w, h);
+    }
+    const size_t ifd_at = 8, exif_at = ifd_at + ifd.size();
+    const size_t pixel_at = (exif_at + (exif_fields_in ? exif.size() : 0) + 15) & ~size_t(15);
+    std::vector<uint32_t> offs(strips);
+    for (uint32_t s = 0; s < strips; ++s)
+        offs[s] = uint32_t(pixel_at + uint64_t(s) * rows_per_strip * row_bytes);
+    ifd.patch(offsets, offs);
+    if (exif_fields_in) ifd.patch(exif_pointer, {uint32_t(exif_at)});
+
+    out.assign({'I', 'I', 42, 0, 8, 0, 0, 0});
+    const auto a = ifd.serialize(ifd_at);
+    out.insert(out.end(), a.begin(), a.end());
+    if (exif_fields_in) {
+        const auto b = exif.serialize(exif_at);
+        out.insert(out.end(), b.begin(), b.end());
+    }
+    if (out.size() > pixel_at) { error = "DNG: internal layout error"; return false; }
+    out.resize(pixel_at, 0);
+    const size_t start = out.size();
+    out.resize(start + size_t(image_bytes));
+    for (size_t i = 0; i < size_t(image_bytes) / 2; ++i) {
+        out[start + 2 * i] = uint8_t(rgb[i]);
+        out[start + 2 * i + 1] = uint8_t(rgb[i] >> 8);
     }
     return true;
 }

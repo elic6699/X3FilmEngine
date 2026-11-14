@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "image_io.hpp"
+#include "generic_develop.hpp"
 #include "json.hpp"
 #include "lensfun_correction.hpp"
 #include "output.hpp"
@@ -901,6 +902,40 @@ static void linear_prophoto_to_srgb_float(const std::vector<float>& lin, uint32_
     }
 }
 
+/* 线性 ProPhoto → **线性 sRGB**（只做矩阵，不做 sRGB OETF）。Fill Light 必须
+ * 在这一域施加：X3FCore build_fill_gain 的输入 lin 就是场景线性 sRGB（亮度
+ * 权重 0.25/0.65/0.10 也按它标定），换域会让提亮量整体走样。 */
+static void linear_prophoto_to_linear_srgb(const std::vector<float>& lin, uint32_t w, uint32_t h,
+                                            std::vector<float>& out) {
+    static const double m[9] = {
+         2.0341864, -0.7273632, -0.3068354,
+        -0.2286284,  1.2315863, -0.0029359,
+        -0.0085190, -0.1532727,  1.1616103
+    };
+    const size_t n = std::min(lin.size() / 3, size_t(w) * h);
+    out.assign(n * 3, 0.0f);
+    for (size_t i = 0; i < n; ++i) {
+        const double r = lin[i * 3], g = lin[i * 3 + 1], b = lin[i * 3 + 2];
+        for (int c = 0; c < 3; ++c) {
+            double v = m[c * 3] * r + m[c * 3 + 1] * g + m[c * 3 + 2] * b;
+            out[i * 3 + c] = float(v > 0.0 ? v : 0.0);
+        }
+    }
+}
+
+/* 线性 sRGB → sRGB 编码值。与 linear_prophoto_to_srgb_float 的 OETF 同式，
+ * 但**不把线性值先夹到 1**：Fill Light 正档会把暗部整体抬过 1，硬夹会让高光
+ * 失去肩部形状（原版 X3FCore 一路用 double 带着余量走）。输出允许 >1，
+ * 最终量化时再夹 0..1。 */
+static void srgb_encode_float(std::vector<float>& v, size_t n) {
+    for (size_t i = 0; i < n * 3; ++i) {
+        double x = double(v[i]);
+        if (x < 0.0) x = 0.0;
+        const double e = x <= 0.0031308 ? 12.92 * x : 1.055 * std::pow(x, 1.0 / 2.4) - 0.055;
+        v[i] = float(e);
+    }
+}
+
 /* 把 sRGB 浮点 0..1 量化成 8-bit（rgb8 / 可选 rgba8，alpha=255）。 */
 static void srgb_float_to_bytes(const std::vector<float>& srgb, uint32_t w, uint32_t h,
                                 std::vector<uint8_t>& rgb8, std::vector<uint8_t>* rgba8) {
@@ -981,12 +1016,55 @@ static void apply_tone_srgb(std::vector<float>& s, uint32_t w, uint32_t h, const
  *   path            source file (UTF-8)
  *   decode          {raw_mode, lens_correction}
  *   long_edge       downsample before correction (0 = full size)
- *   output          "rgb_f32le" (default) | "rgba8" | "jpeg"
+ *   output          "rgb_f32le" (default) | "rgba8" | "jpeg" | "tiff16" | "dng"
  *   quality         JPEG quality when output=jpeg (default 92)
+ *   develop         {exposure, contrast, saturation, shadow, highlight,
+ *                    wb_*, curve[257], split[6], hsl{h,s,l}, mono, sharpness}
+ *                   —— 全中性时整段旁路，输出与 3.5.49 逐位一致。
+ *   tiff16 / dng 由外壳的「TIFF 16 位」「DNG（真实 RAW）」两档调用；DNG 写的是
+ *   未套观感的线性 ProPhoto 16 位 LinearRaw，观感参数不进文件。
  * result.format / color_space follow `output`; payload is the corresponding
  * byte stream. `jpeg` encodes inside the host, so a 100 MP export never
  * pushes a 1 GB float frame across the pipe.
  */
+/* 通用 RAW 解码帧缓存（3.5.50）：LibRaw 全尺寸 AHD 解码是整条链最贵的一段，
+ * 以前每发一次 decode_raw_frame 都从磁盘重解一遍，拖一根滑杆就付一次几秒~
+ * 几十秒的全解码。这里按「源文件 + 解码选项 + 目标长边」缓存已经缩图、已经
+ * lensfun 矫正的线性 ProPhoto 帧；develop 变化只重跑显示域调整 + 编码。
+ * 上限：单帧 ≤ 512 MB 且最多 2 帧（预览降采样帧很小；全尺寸 100 MP 不缓存，
+ * 导出每张本来也只解一次）。host 是单 worker 串行，shared_ptr 保证读期间不失效。 */
+struct GrawFrameCache {
+    std::string key;
+    Decoded d;
+    LensCorrectionInfo lc;
+    size_t bytes = 0;
+};
+static std::mutex g_grawCacheMu;
+static std::vector<std::shared_ptr<GrawFrameCache>> g_grawCache;   /* 最近优先 */
+
+/* Fill Light 基座（A/B/C 三张 map）单槽缓存：只依赖未做曝光/白平衡的线性帧，
+ * 与 F 无关。拖 Fill Light 滑杆时只剩查表 + 采样，不重跑金字塔 ——
+ * 对应 X3FCore 的 g_fl_slot_a/b/c（2026-10-22 的「apply 中间结果缓存」）。 */
+static std::mutex g_fillBaseMu;
+static spkhost::graw::FillBase g_fillBase;
+static std::string g_fillBaseKey;
+
+static std::string graw_cache_key(const fs::path& path, const DecodeOptions& o,
+                                  uint32_t long_edge) {
+    std::error_code ec;
+    const uint64_t size = uint64_t(fs::file_size(path, ec));
+    const uint64_t mtime = ec ? 0 : uint64_t(
+        fs::last_write_time(path, ec).time_since_epoch().count());
+    char b[256];
+    std::snprintf(b, sizeof(b), "|%llu|%llu|%s|%.4f|%.4f|%d|%u",
+                  (unsigned long long)size, (unsigned long long)mtime,
+                  o.raw_mode.c_str(),
+                  o.temperature_k ? *o.temperature_k : 0.0,
+                  o.tint ? *o.tint : 0.0,
+                  o.lens_correction ? 1 : 0, long_edge);
+    return path_utf8(path) + b;
+}
+
 Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
     const fs::path path = utf8_path(require_string(q.params, "path"));
     /* long_edge is a TOP-LEVEL key: decode_options() rejects unknown keys
@@ -994,8 +1072,9 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
     const uint32_t long_edge = uint32_t(std::max(0, q.params.at("long_edge").as_int(0)));
     const DecodeOptions options = decode_options(q.params.at("decode"));
     const std::string output = optional_string(q.params, "output", "rgb_f32le");
-    if (output != "rgb_f32le" && output != "rgba8" && output != "jpeg")
-        throw HostError{"bad_request", "output must be rgb_f32le, rgba8 or jpeg"};
+    if (output != "rgb_f32le" && output != "rgba8" && output != "jpeg" &&
+        output != "tiff16" && output != "dng")
+        throw HostError{"bad_request", "output must be rgb_f32le, rgba8, jpeg, tiff16 or dng"};
     const int quality = std::min(100, std::max(1, q.params.at("quality").as_int(92)));
 
     /* 通用 RAW 影调阶段参数（与 X3F 同一套数学）。缺 develop 对象时全 0 = 中性直通。 */
@@ -1008,6 +1087,9 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
         tone.shadow     = dev.at("shadow").as_double(0.0);
         tone.highlight  = dev.at("highlight").as_double(0.0);
     }
+    /* 3.5.50 扩展：白平衡 RGB / 色调曲线 / 分色 HSL / 色彩分离 / 黑白 / 锐度。
+     * 全部为中性时整段旁路，零滑杆与 3.5.49 逐位一致。 */
+    const spkhost::graw::Develop dev = spkhost::graw::parse(q.params.at("develop"));
 
     const std::string ext = [&] {
         std::string e = path_utf8(path.extension());
@@ -1017,26 +1099,66 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
     if (ext == ".x3f" || ext == ".x3i")
         throw HostError{"unsupported", "decode_raw_frame is for camera RAW, not X3F/X3I"};
 
-    Decoded d = decode_frame(path, options);   // LibRaw, no need_engine()
-    if (d.probe.kind != FileKind::Raw)
-        throw HostError{"unsupported", "decode_raw_frame only accepts camera RAW files"};
-
-    /* Shrink BEFORE lens correction: a preview of a 100 MP frame then costs
-       ~20 MB of payload and a few ms of correction instead of ~1 GB. */
-    shrink_to(d.frame.rgb, d.frame.width, d.frame.height, long_edge);
-
-    LensCorrectionInfo lc;
-    apply_lensfun(d.frame, d.probe.metadata, g.resources,
-                  options.lens_correction, lc);
-
+    /* ── 解码（带缓存）──────────────────────────────────────────────── */
+    const std::string cacheKey = graw_cache_key(path, options, long_edge);
+    std::shared_ptr<GrawFrameCache> used;
+    bool cacheHit = false;
+    {
+        std::lock_guard<std::mutex> lock(g_grawCacheMu);
+        for (const auto& c : g_grawCache)
+            if (c->key == cacheKey) { used = c; cacheHit = true; break; }
+    }
+    if (!used) {
+        auto fresh = std::make_shared<GrawFrameCache>();
+        fresh->key = cacheKey;
+        fresh->d = decode_frame(path, options);   // LibRaw, no need_engine()
+        if (fresh->d.probe.kind != FileKind::Raw)
+            throw HostError{"unsupported", "decode_raw_frame only accepts camera RAW files"};
+        /* Shrink BEFORE lens correction: a preview of a 100 MP frame then costs
+           ~20 MB of payload and a few ms of correction instead of ~1 GB. */
+        shrink_to(fresh->d.frame.rgb, fresh->d.frame.width, fresh->d.frame.height, long_edge);
+        apply_lensfun(fresh->d.frame, fresh->d.probe.metadata, g.resources,
+                      options.lens_correction, fresh->lc);
+        fresh->bytes = fresh->d.frame.rgb.size() * sizeof(float);
+        used = fresh;
+        if (fresh->bytes <= (size_t(512) << 20)) {
+            std::lock_guard<std::mutex> lock(g_grawCacheMu);
+            g_grawCache.insert(g_grawCache.begin(), fresh);
+            if (g_grawCache.size() > 2) g_grawCache.resize(2);
+        }
+    }
+    const Decoded& d = used->d;
+    const LensCorrectionInfo& lc = used->lc;
     const uint32_t w = d.frame.width, h = d.frame.height;
     const size_t pixels = size_t(w) * h;
     if (d.frame.rgb.size() < pixels * 3)
         throw HostError{"engine_error", "decoded frame size mismatch"};
+    const bool neutral = toneIsIdentity(tone) && spkhost::graw::identity(dev);
 
     std::string format, color_space;
     double row_bytes = 0;
-    if (output == "rgb_f32le") {
+    auto clamp_unit = [](double v) { return v < 0 ? 0.0 : (v > 1 ? 1.0 : v); };
+    std::vector<uint8_t> icc;
+    std::string error;
+    if (!icc_for(engine_space_name("sRGB"), g.resources, icc, error))
+        throw HostError{"io_error", error};
+
+    if (output == "dng") {
+        /* 真实 RAW：写的是 LibRaw 解出的线性 ProPhoto，观感参数一概不进文件
+         * （与 X3F 的 DNG 同口径）。AsShotNeutral=1:1:1、ColorMatrix1 描述
+         * ProPhoto，读 DNG 的软件自行接手显影。 */
+        std::vector<uint16_t> lin16(pixels * 3);
+        for (size_t i = 0; i < pixels * 3; ++i)
+            lin16[i] = uint16_t(std::lround(clamp_unit(d.frame.rgb[i]) * 65535.0));
+        const Exif exif = exif_of(d.probe.metadata);
+        const std::string camera = d.probe.metadata.make.empty()
+            ? d.probe.metadata.model
+            : d.probe.metadata.make + " " + d.probe.metadata.model;
+        if (!encode_dng(lin16.data(), w, h, camera, &exif, payload, error))
+            throw HostError{"io_error", error};
+        format = "dng";
+        color_space = "linear_prophoto";
+    } else if (output == "rgb_f32le") {
         /* Legacy/debug path: the shell wants the raw linear ProPhoto float
            frame. It must not be used for full-res previews of large RAWs. */
         format = "rgb_f32le";
@@ -1046,7 +1168,9 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
         std::memcpy(payload.data(), d.frame.rgb.data(), pixels * 3 * 4);
     } else {
         std::vector<uint8_t> rgb8, rgba8;
-        if (toneIsIdentity(tone)) {
+        std::vector<float> srgb;
+        if (neutral && output != "tiff16") {
+            /* 零滑杆 = 3.5.49 的原路径，逐位一致（零回归铁律）。 */
             if (output == "jpeg") {
                 linear_prophoto_to_srgb8(d.frame.rgb, w, h, rgb8, nullptr);
             } else {
@@ -1057,30 +1181,72 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
                 payload = std::move(rgba8);
             }
         } else {
-            /* 曝光为线性增益（ProPhoto 线性域，sRGB 编码前），随后转 sRGB 浮点
-             * 再施加对比度 / 饱和度 / 阴影 / 高光。WB 已在 decode 的 custom_wb 完成。 */
+            /* 曝光为线性增益（ProPhoto 线性域，sRGB 编码前），WB 的 RGB 三通道
+             * 强度也在这一域；随后转 sRGB 浮点再施加影调 / 曲线 / HSL / 色彩
+             * 分离 / 黑白 / 锐度。custom_wb 已在 decode 阶段完成。 */
             std::vector<float> lin = d.frame.rgb;
+            /* Fill Light 的增益图必须在**未做曝光/白平衡**的线性帧上算：
+             * X3FCore 是 build_fill_gain(src8) 之后才在 apply_row 里乘 WB/曝光
+             * 增益，所以曝光滑杆不会连带改变填充光的提亮量。 */
+            std::vector<float> grawGain;
+            if (dev.fill_light != 0.0) {
+                std::lock_guard<std::mutex> gfl(g_fillBaseMu);
+                if (g_fillBaseKey != cacheKey || !g_fillBase.valid()) {
+                    std::vector<float> base;
+                    linear_prophoto_to_linear_srgb(d.frame.rgb, w, h, base);
+                    if (spkhost::graw::fill_base_build(base.data(), int(w), int(h), g_fillBase))
+                        g_fillBaseKey = cacheKey;
+                    else {
+                        g_fillBase = spkhost::graw::FillBase();
+                        g_fillBaseKey.clear();
+                    }
+                }
+                if (g_fillBase.valid())
+                    grawGain = spkhost::graw::fill_gain_from_base(g_fillBase, int(w), int(h),
+                                                                  dev.fill_light);
+            }
             if (tone.exposure != 0.0) {
                 const double g = std::pow(2.0, tone.exposure);
                 for (float& v : lin) v = float(v * g);
             }
-            std::vector<float> srgb;
-            linear_prophoto_to_srgb_float(lin, w, h, srgb);
-            apply_tone_srgb(srgb, w, h, tone);
-            srgb_float_to_bytes(srgb, w, h, rgb8,
-                                output == "jpeg" ? nullptr : &rgba8);
-            if (output != "jpeg") {
-                format = "rgba8";
+            spkhost::graw::apply_wb_gain(lin, dev);
+            if (!grawGain.empty()) {
+                /* 线性 ProPhoto → 线性 sRGB（只做矩阵）→ 乘增益 → sRGB 编码。 */
+                std::vector<float> linsrgb;
+                linear_prophoto_to_linear_srgb(lin, w, h, linsrgb);
+                lin.clear();
+                lin.shrink_to_fit();
+                spkhost::graw::apply_fill_gain(linsrgb, w, h, grawGain);
+                srgb_encode_float(linsrgb, std::min(linsrgb.size() / 3, size_t(w) * h));
+                srgb = std::move(linsrgb);
+            } else {
+                linear_prophoto_to_srgb_float(lin, w, h, srgb);
+                lin.clear();
+                lin.shrink_to_fit();     /* 100 MP 全幅时别白占 1.2 GB */
+            }
+            if (!toneIsIdentity(tone)) apply_tone_srgb(srgb, w, h, tone);
+            if (!spkhost::graw::identity(dev)) spkhost::graw::apply_display(srgb, w, h, dev);
+            if (output == "tiff16") {
+                std::vector<uint16_t> rgb16(pixels * 3);
+                for (size_t i = 0; i < pixels * 3; ++i)
+                    rgb16[i] = uint16_t(std::lround(clamp_unit(srgb[i]) * 65535.0));
+                const Exif exif = exif_of(d.probe.metadata);
+                if (!encode_tiff(rgb16.data(), w, h, 16, icc, payload, error, &exif))
+                    throw HostError{"io_error", error};
+                format = "tiff16";
                 color_space = "sRGB";
-                row_bytes = double(w) * 4;
-                payload = std::move(rgba8);
+            } else {
+                srgb_float_to_bytes(srgb, w, h, rgb8,
+                                    output == "jpeg" ? nullptr : &rgba8);
+                if (output != "jpeg") {
+                    format = "rgba8";
+                    color_space = "sRGB";
+                    row_bytes = double(w) * 4;
+                    payload = std::move(rgba8);
+                }
             }
         }
         if (output == "jpeg") {
-            std::vector<uint8_t> icc;
-            std::string error;
-            if (!icc_for(engine_space_name("sRGB"), g.resources, icc, error))
-                throw HostError{"io_error", error};
             const Exif exif = exif_of(d.probe.metadata);
             if (!encode_jpeg(rgb8.data(), w, h, quality, icc, payload, error, &exif))
                 throw HostError{"io_error", error};
@@ -1100,6 +1266,7 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
     r.set("kind", str(kind_name(d.probe.kind)));
     r.set("metadata", metadata_json(d.probe.metadata));
     r.set("decode_ms", number(d.decode_ms));
+    r.set("decode_cached", Json(cacheHit));   /* 3.5.50：命中解码帧缓存 = 没重跑 LibRaw */
     r.set("long_edge_applied", Json(long_edge > 0));
 
     Json lens = Json::object();

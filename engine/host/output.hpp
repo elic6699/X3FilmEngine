@@ -68,6 +68,15 @@ struct Exif {
 bool encode_tiff(const void* rgb, uint32_t width, uint32_t height, uint32_t bits,
                  const std::vector<uint8_t>& icc, std::vector<uint8_t>& out, std::string& error,
                  const Exif* exif = nullptr);
+// 通用 RAW 的 DNG 出口：把 LibRaw 解出的**线性 ProPhoto 16 位 RGB**按 DNG
+// 的 LinearRaw（PhotometricInterpretation=34892）封装。DNG 是「真实 RAW」容器，
+// 观感参数不写进文件（与 X3F 的 DNG 同口径），只带 AsShotNeutral / ColorMatrix1 /
+// WhiteLevel 这类解 RAW 必需的标定。Lightroom 等按 DNG 规范读 LinearRaw 的软件
+// 可以直接打开；个别只认 Bayer CFA 的工具会退回显示内嵌预览。
+bool encode_dng(const uint16_t* rgb, uint32_t width, uint32_t height,
+                const std::string& camera_model, const Exif* exif,
+                std::vector<uint8_t>& out, std::string& error);
+
 bool encode_png8(const uint8_t* rgb, uint32_t width, uint32_t height, const std::vector<uint8_t>& icc,
                  std::vector<uint8_t>& out, std::string& error, const Exif* exif = nullptr);
 bool encode_jpeg(const uint8_t* rgb, uint32_t width, uint32_t height, int quality,
