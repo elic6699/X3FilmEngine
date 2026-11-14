@@ -11,6 +11,7 @@
 #include <limits>
 #include <iterator>
 #include <memory>
+#include <thread>
 #include <utility>
 
 namespace spk::io {
@@ -307,12 +308,37 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
         decoded.width = image->width;
         decoded.height = image->height;
         decoded.rgb.resize(static_cast<std::size_t>(samples));
-        for (std::size_t i = 0; i < decoded.rgb.size(); ++i) {
-            std::uint16_t value;
-            // LibRaw returns native-endian 16-bit samples. memcpy avoids
-            // imposing alignment or aliasing assumptions on its byte array.
-            std::memcpy(&value, image->data + i * sizeof(value), sizeof(value));
-            decoded.rgb[i] = static_cast<float>(static_cast<double>(value) / 65535.0);
+        /* 42MP 全幅 = 1.27 亿次 uint16→float，单线程约 0.7 s，纯内存带宽活。
+         * 按元素区间切块并行，每块只写自己那一段，结果与串行逐位一致。 */
+        const unsigned hw = std::thread::hardware_concurrency();
+        const unsigned threads = std::min<unsigned>(hw ? hw : 1, 8);
+        if (threads > 1 && samples > (std::size_t(1) << 20)) {
+            std::vector<std::thread> pool;
+            const std::size_t chunk = (samples + threads - 1) / threads;
+            const unsigned char* bytes = image->data;
+            for (unsigned t = 0; t < threads; ++t) {
+                const std::size_t b = std::size_t(t) * chunk;
+                const std::size_t e = std::min<std::size_t>(samples, b + chunk);
+                if (b >= e) break;
+                pool.emplace_back([&decoded, bytes, b, e] {
+                    for (std::size_t i = b; i < e; ++i) {
+                        std::uint16_t value;
+                        // LibRaw returns native-endian 16-bit samples. memcpy avoids
+                        // imposing alignment or aliasing assumptions on its byte array.
+                        std::memcpy(&value, bytes + i * sizeof(value), sizeof(value));
+                        decoded.rgb[i] = static_cast<float>(static_cast<double>(value) / 65535.0);
+                    }
+                });
+            }
+            for (auto& th : pool) th.join();
+        } else {
+            for (std::size_t i = 0; i < decoded.rgb.size(); ++i) {
+                std::uint16_t value;
+                // LibRaw returns native-endian 16-bit samples. memcpy avoids
+                // imposing alignment or aliasing assumptions on its byte array.
+                std::memcpy(&value, image->data + i * sizeof(value), sizeof(value));
+                decoded.rgb[i] = static_cast<float>(static_cast<double>(value) / 65535.0);
+            }
         }
         decoded.timings.convert_ms = elapsed_ms(start);
         decoded.timings.total_ms = elapsed_ms(total_start);

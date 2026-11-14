@@ -33,6 +33,7 @@
 
 #include "image_io.hpp"
 #include "generic_develop.hpp"
+#include "luma_finish.hpp"
 #include "json.hpp"
 #include "lensfun_correction.hpp"
 #include "output.hpp"
@@ -857,16 +858,26 @@ static void linear_prophoto_to_srgb8(const std::vector<float>& lin,
     const size_t n = std::min(lin.size() / 3, size_t(w) * h);
     rgb8.assign(n * 3, 0);
     if (rgba8) rgba8->assign(n * 4, 255);
-    for (size_t i = 0; i < n; ++i) {
-        const double r = lin[i * 3], g = lin[i * 3 + 1], b = lin[i * 3 + 2];
-        for (int c = 0; c < 3; ++c) {
-            double v = m[c * 3] * r + m[c * 3 + 1] * g + m[c * 3 + 2] * b;
-            v = std::min(1.0, std::max(0.0, v));
-            uint8_t q = trc[uint16_t(v * 65535.0 + 0.5)];
-            rgb8[i * 3 + c] = q;
-            if (rgba8) (*rgba8)[i * 4 + c] = q;
+    /* 逐行并行：每个像素只读 lin、只写自己那一格，运算顺序与单线程完全相同，
+     * 所以输出逐位一致。42MP 全幅这一遍约 0.7 s，四核可压到 0.2 s 以内。 */
+    uint8_t* out3 = rgb8.data();
+    uint8_t* out4 = rgba8 ? rgba8->data() : nullptr;
+    if (!w || !h) return;
+    spkhost::graw::parallel_rows(h, [&](uint32_t y0, uint32_t y1) {
+        for (uint32_t y = y0; y < y1; ++y) {
+            const size_t rowEnd = std::min(n, (size_t(y) + 1) * w);
+            for (size_t i = size_t(y) * w; i < rowEnd; ++i) {
+                const double r = lin[i * 3], g = lin[i * 3 + 1], b = lin[i * 3 + 2];
+                for (int c = 0; c < 3; ++c) {
+                    double v = m[c * 3] * r + m[c * 3 + 1] * g + m[c * 3 + 2] * b;
+                    v = std::min(1.0, std::max(0.0, v));
+                    uint8_t q = trc[uint16_t(v * 65535.0 + 0.5)];
+                    out3[i * 3 + c] = q;
+                    if (out4) out4[i * 4 + c] = q;
+                }
+            }
         }
-    }
+    });
 }
 
 /* ─── 通用 RAW 影调阶段（与 X3F 同一套数学，live.js 的 transform() 是引擎真值）──
@@ -891,15 +902,22 @@ static void linear_prophoto_to_srgb_float(const std::vector<float>& lin, uint32_
     };
     const size_t n = std::min(lin.size() / 3, size_t(w) * h);
     srgb.assign(n * 3, 0.0f);
-    for (size_t i = 0; i < n; ++i) {
-        const double r = lin[i * 3], g = lin[i * 3 + 1], b = lin[i * 3 + 2];
-        for (int c = 0; c < 3; ++c) {
-            double v = m[c * 3] * r + m[c * 3 + 1] * g + m[c * 3 + 2] * b;
-            v = std::min(1.0, std::max(0.0, v));
-            double e = v <= 0.0031308 ? 12.92 * v : 1.055 * std::pow(v, 1.0 / 2.4) - 0.055;
-            srgb[i * 3 + c] = float(std::min(1.0, std::max(0.0, e)));
+    if (!w || !h) return;
+    spkhost::graw::parallel_rows(h, [&](uint32_t y0, uint32_t y1) {
+        for (uint32_t y = y0; y < y1; ++y) {
+            const size_t rowEnd = std::min(n, (size_t(y) + 1) * w);
+            for (size_t i = size_t(y) * w; i < rowEnd; ++i) {
+                const double r = lin[i * 3], g = lin[i * 3 + 1], b = lin[i * 3 + 2];
+                for (int c = 0; c < 3; ++c) {
+                    double v = m[c * 3] * r + m[c * 3 + 1] * g + m[c * 3 + 2] * b;
+                    v = std::min(1.0, std::max(0.0, v));
+                    double e = v <= 0.0031308 ? 12.92 * v
+                                              : 1.055 * std::pow(v, 1.0 / 2.4) - 0.055;
+                    srgb[i * 3 + c] = float(std::min(1.0, std::max(0.0, e)));
+                }
+            }
         }
-    }
+    });
 }
 
 /* 线性 ProPhoto → **线性 sRGB**（只做矩阵，不做 sRGB OETF）。Fill Light 必须
@@ -914,26 +932,40 @@ static void linear_prophoto_to_linear_srgb(const std::vector<float>& lin, uint32
     };
     const size_t n = std::min(lin.size() / 3, size_t(w) * h);
     out.assign(n * 3, 0.0f);
-    for (size_t i = 0; i < n; ++i) {
-        const double r = lin[i * 3], g = lin[i * 3 + 1], b = lin[i * 3 + 2];
-        for (int c = 0; c < 3; ++c) {
-            double v = m[c * 3] * r + m[c * 3 + 1] * g + m[c * 3 + 2] * b;
-            out[i * 3 + c] = float(v > 0.0 ? v : 0.0);
+    if (!w || !h) return;
+    spkhost::graw::parallel_rows(h, [&](uint32_t y0, uint32_t y1) {
+        for (uint32_t y = y0; y < y1; ++y) {
+            const size_t rowEnd = std::min(n, (size_t(y) + 1) * w);
+            for (size_t i = size_t(y) * w; i < rowEnd; ++i) {
+                const double r = lin[i * 3], g = lin[i * 3 + 1], b = lin[i * 3 + 2];
+                for (int c = 0; c < 3; ++c) {
+                    double v = m[c * 3] * r + m[c * 3 + 1] * g + m[c * 3 + 2] * b;
+                    out[i * 3 + c] = float(v > 0.0 ? v : 0.0);
+                }
+            }
         }
-    }
+    });
 }
 
 /* 线性 sRGB → sRGB 编码值。与 linear_prophoto_to_srgb_float 的 OETF 同式，
  * 但**不把线性值先夹到 1**：Fill Light 正档会把暗部整体抬过 1，硬夹会让高光
  * 失去肩部形状（原版 X3FCore 一路用 double 带着余量走）。输出允许 >1，
  * 最终量化时再夹 0..1。 */
-static void srgb_encode_float(std::vector<float>& v, size_t n) {
-    for (size_t i = 0; i < n * 3; ++i) {
-        double x = double(v[i]);
-        if (x < 0.0) x = 0.0;
-        const double e = x <= 0.0031308 ? 12.92 * x : 1.055 * std::pow(x, 1.0 / 2.4) - 0.055;
-        v[i] = float(e);
-    }
+static void srgb_encode_float(std::vector<float>& v, uint32_t w, uint32_t h) {
+    const size_t n = std::min(v.size() / 3, size_t(w) * h);
+    if (!w || !h) return;
+    spkhost::graw::parallel_rows(h, [&](uint32_t y0, uint32_t y1) {
+        for (uint32_t y = y0; y < y1; ++y) {
+            const size_t rowEnd = std::min(n, (size_t(y) + 1) * w);
+            for (size_t i = size_t(y) * w * 3; i < rowEnd * 3; ++i) {
+                double x = double(v[i]);
+                if (x < 0.0) x = 0.0;
+                const double e = x <= 0.0031308 ? 12.92 * x
+                                                : 1.055 * std::pow(x, 1.0 / 2.4) - 0.055;
+                v[i] = float(e);
+            }
+        }
+    });
 }
 
 /* 把 sRGB 浮点 0..1 量化成 8-bit（rgb8 / 可选 rgba8，alpha=255）。 */
@@ -942,14 +974,22 @@ static void srgb_float_to_bytes(const std::vector<float>& srgb, uint32_t w, uint
     const size_t n = std::min(srgb.size() / 3, size_t(w) * h);
     rgb8.assign(n * 3, 0);
     if (rgba8) rgba8->assign(n * 4, 255);
-    for (size_t i = 0; i < n; ++i) {
-        for (int c = 0; c < 3; ++c) {
-            double v = double(srgb[i * 3 + c]);
-            int q = int(std::lround(std::min(1.0, std::max(0.0, v)) * 255.0));
-            rgb8[i * 3 + c] = uint8_t(q);
-            if (rgba8) (*rgba8)[i * 4 + c] = uint8_t(q);
+    if (!w || !h) return;
+    uint8_t* out3 = rgb8.data();
+    uint8_t* out4 = rgba8 ? rgba8->data() : nullptr;
+    spkhost::graw::parallel_rows(h, [&](uint32_t y0, uint32_t y1) {
+        for (uint32_t y = y0; y < y1; ++y) {
+            const size_t rowEnd = std::min(n, (size_t(y) + 1) * w);
+            for (size_t i = size_t(y) * w; i < rowEnd; ++i) {
+                for (int c = 0; c < 3; ++c) {
+                    double v = double(srgb[i * 3 + c]);
+                    int q = int(std::lround(std::min(1.0, std::max(0.0, v)) * 255.0));
+                    out3[i * 3 + c] = uint8_t(q);
+                    if (out4) out4[i * 4 + c] = uint8_t(q);
+                }
+            }
         }
-    }
+    });
 }
 
 /* 在 sRGB 显示域施加对比度 / 饱和度 / 阴影 / 高光（exposure 已作为线性增益在
@@ -962,7 +1002,12 @@ static void apply_tone_srgb(std::vector<float>& s, uint32_t w, uint32_t h, const
     if (eHl < 0) eHl *= 0.25;                             // 压暗侧只有 1/4 强度
     eHl = std::pow(2.0, -2.0 * eHl);
     const size_t n = std::min(s.size() / 3, size_t(w) * h);
-    for (size_t i = 0; i < n; ++i) {
+    if (!w || !h) return;
+    /* 逐行并行：每个像素只读自己那三个通道，输出写回原地，行间无共享状态。 */
+    spkhost::graw::parallel_rows(h, [&](uint32_t y0, uint32_t y1) {
+    for (uint32_t y = y0; y < y1; ++y) {
+        const size_t rowEnd = std::min(n, (size_t(y) + 1) * w);
+    for (size_t i = size_t(y) * w; i < rowEnd; ++i) {
         double r = s[i * 3], g = s[i * 3 + 1], b = s[i * 3 + 2];
         /* 1) 对比度：logit 域斜率乘子，端点 0/1 不动点 */
         if (t.contrast != 0) {
@@ -1003,6 +1048,8 @@ static void apply_tone_srgb(std::vector<float>& s, uint32_t w, uint32_t h, const
             s[i * 3 + c] = v < 0 ? 0.0f : (v > 1 ? 1.0f : s[i * 3 + c]);
         }
     }
+    }
+    });
 }
 
 /* Generic RAW frame export (LibRaw only, no engine session).
@@ -1077,6 +1124,21 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
         throw HostError{"bad_request", "output must be rgb_f32le, rgba8, jpeg, tiff16 or dng"};
     const int quality = std::min(100, std::max(1, q.params.at("quality").as_int(92)));
 
+    /* SPK_TIMING=1：把这一帧的时间拆成 decode / convert / encode 打到 stderr。
+     * 只影响日志，不影响任何输出字节。LibRaw 解码是大头，量出来才知道往哪投。 */
+    const bool timing = std::getenv("SPK_TIMING") != nullptr;
+    const auto tEnter = Clock::now();
+    auto tStage = Clock::now();
+    std::string tLine;
+    auto mark = [&](const char* name) {
+        if (!timing) return;
+        const double ms = ms_since(tStage);
+        tStage = Clock::now();
+        char b[96];
+        std::snprintf(b, sizeof(b), "%s=%.0fms ", name, ms);
+        tLine += b;
+    };
+
     /* 通用 RAW 影调阶段参数（与 X3F 同一套数学）。缺 develop 对象时全 0 = 中性直通。 */
     ToneP tone;
     if (q.params.has("develop")) {
@@ -1090,6 +1152,20 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
     /* 3.5.50 扩展：白平衡 RGB / 色调曲线 / 分色 HSL / 色彩分离 / 黑白 / 锐度。
      * 全部为中性时整段旁路，零滑杆与 3.5.49 逐位一致。 */
     const spkhost::graw::Develop dev = spkhost::graw::parse(q.params.at("develop"));
+
+    /* 明度层 finish（3.5.52）：与 X3F 侧 X3L_YLayerFinishRGB24 同一套算法，只作用在
+     * 8-bit 出图（jpeg / rgba8）上 —— 编码在引擎里，这一道必须插在编码之前才能保住
+     * EXIF / ICC 一次成型。develop 里没这几个键 / yfinish=0 时整段跳过（零回归）。 */
+    spkhost::graw::LumaFinish fin;
+    {
+        const Json dv = q.params.at("develop");
+        fin.on          = dv.at("yfinish").as_double(0.0) > 0.5;
+        fin.sharpen     = dv.at("ysharpen").as_double(0.0);
+        fin.grain_size  = dv.at("grainsize").as_double(3.0);
+        fin.grain_rough = dv.at("grainrough").as_double(0.0);
+        fin.strength    = dv.at("ystrength").as_double(100.0);
+        fin.scale       = dv.at("finish_scale").as_double(1.0);
+    }
 
     const std::string ext = [&] {
         std::string e = path_utf8(path.extension());
@@ -1128,7 +1204,13 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
         }
     }
     const Decoded& d = used->d;
+    mark("decode");
     const LensCorrectionInfo& lc = used->lc;
+    if (timing)
+        log_line(1, std::string("  lens opt=") + (options.lens_correction ? "1" : "0") +
+                        " req=" + (lc.requested ? "1" : "0") +
+                        " applied=" + (lc.applied ? "1" : "0") +
+                        " supported=" + (lc.supported ? "1" : "0"));
     const uint32_t w = d.frame.width, h = d.frame.height;
     const size_t pixels = size_t(w) * h;
     if (d.frame.rgb.size() < pixels * 3)
@@ -1148,14 +1230,22 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
          * （与 X3F 的 DNG 同口径）。AsShotNeutral=1:1:1、ColorMatrix1 描述
          * ProPhoto，读 DNG 的软件自行接手显影。 */
         std::vector<uint16_t> lin16(pixels * 3);
-        for (size_t i = 0; i < pixels * 3; ++i)
-            lin16[i] = uint16_t(std::lround(clamp_unit(d.frame.rgb[i]) * 65535.0));
+        {
+            const float* src = d.frame.rgb.data();
+            spkhost::graw::parallel_rows(h, [&](uint32_t y0, uint32_t y1) {
+                const size_t from = size_t(y0) * w * 3, to = size_t(y1) * w * 3;
+                for (size_t i = from; i < to; ++i)
+                    lin16[i] = uint16_t(std::lround(clamp_unit(src[i]) * 65535.0));
+            });
+        }
+        mark("convert");
         const Exif exif = exif_of(d.probe.metadata);
         const std::string camera = d.probe.metadata.make.empty()
             ? d.probe.metadata.model
             : d.probe.metadata.make + " " + d.probe.metadata.model;
         if (!encode_dng(lin16.data(), w, h, camera, &exif, payload, error))
             throw HostError{"io_error", error};
+        mark("encode");
         format = "dng";
         color_space = "linear_prophoto";
     } else if (output == "rgb_f32le") {
@@ -1175,11 +1265,15 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
                 linear_prophoto_to_srgb8(d.frame.rgb, w, h, rgb8, nullptr);
             } else {
                 linear_prophoto_to_srgb8(d.frame.rgb, w, h, rgb8, &rgba8);
+                /* 明度层 finish 在 RGBA 上跑（预览 / 细节帧）：只动 RGB，alpha 不动。 */
+                if (fin.active())
+                    spkhost::graw::apply_luma_finish(rgba8.data(), int(w), int(h), 4, fin);
                 format = "rgba8";
                 color_space = "sRGB";
                 row_bytes = double(w) * 4;
                 payload = std::move(rgba8);
             }
+            mark("convert");
         } else {
             /* 曝光为线性增益（ProPhoto 线性域，sRGB 编码前），WB 的 RGB 三通道
              * 强度也在这一域；随后转 sRGB 浮点再施加影调 / 曲线 / HSL / 色彩
@@ -1224,7 +1318,7 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
                 lin.clear();
                 lin.shrink_to_fit();
                 spkhost::graw::apply_fill_gain(linsrgb, w, h, grawGain);
-                srgb_encode_float(linsrgb, std::min(linsrgb.size() / 3, size_t(w) * h));
+                srgb_encode_float(linsrgb, w, h);
                 srgb = std::move(linsrgb);
             } else {
                 linear_prophoto_to_srgb_float(lin, w, h, srgb);
@@ -1233,19 +1327,28 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
             }
             if (!toneIsIdentity(tone)) apply_tone_srgb(srgb, w, h, tone);
             if (!spkhost::graw::identity(dev)) spkhost::graw::apply_display(srgb, w, h, dev);
+            mark("convert");
             if (output == "tiff16") {
                 std::vector<uint16_t> rgb16(pixels * 3);
-                for (size_t i = 0; i < pixels * 3; ++i)
-                    rgb16[i] = uint16_t(std::lround(clamp_unit(srgb[i]) * 65535.0));
+                spkhost::graw::parallel_rows(h, [&](uint32_t y0, uint32_t y1) {
+                    const size_t from = size_t(y0) * w * 3, to = size_t(y1) * w * 3;
+                    for (size_t i = from; i < to; ++i)
+                        rgb16[i] = uint16_t(std::lround(clamp_unit(srgb[i]) * 65535.0));
+                });
+                mark("quantize");
                 const Exif exif = exif_of(d.probe.metadata);
                 if (!encode_tiff(rgb16.data(), w, h, 16, icc, payload, error, &exif))
                     throw HostError{"io_error", error};
+                mark("encode");
                 format = "tiff16";
                 color_space = "sRGB";
             } else {
                 srgb_float_to_bytes(srgb, w, h, rgb8,
                                     output == "jpeg" ? nullptr : &rgba8);
+                mark("quantize");
                 if (output != "jpeg") {
+                    if (fin.active())
+                        spkhost::graw::apply_luma_finish(rgba8.data(), int(w), int(h), 4, fin);
                     format = "rgba8";
                     color_space = "sRGB";
                     row_bytes = double(w) * 4;
@@ -1254,13 +1357,26 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
             }
         }
         if (output == "jpeg") {
+            /* 明度层 finish：编码前最后一刀（与外壳 X3F 路径同位置 —— 画幅裁切
+             * 之后、JPEG 编码之前）。中性 / 非中性两条路都汇到这里。 */
+            if (fin.active()) {
+                spkhost::graw::apply_luma_finish(rgb8.data(), int(w), int(h), 3, fin);
+                mark("luma");
+            }
             const Exif exif = exif_of(d.probe.metadata);
             if (!encode_jpeg(rgb8.data(), w, h, quality, icc, payload, error, &exif))
                 throw HostError{"io_error", error};
+            mark("encode");
             format = "jpeg";
             color_space = "sRGB";
         }
     }
+    if (timing)
+        log_line(1, "decode_raw_frame " + std::to_string(w) + "x" + std::to_string(h) +
+                        " " + output + ": " + tLine +
+                        "libraw=" + std::to_string(int(d.decode_ms)) +
+                        "ms lensfun=" + std::to_string(int(lc.ms)) +
+                        "ms total=" + std::to_string(int(ms_since(tEnter))) + "ms");
 
     Json r = Json::object();
     r.set("width", number(w));

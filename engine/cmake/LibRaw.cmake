@@ -3,6 +3,24 @@ set(SPEKTRALAB_LIBRAW_SOURCE "${SPEKTRALAB_DEPS_DIR}/LibRaw-0.22.2" CACHE PATH "
 if(NOT EXISTS "${SPEKTRALAB_LIBRAW_SOURCE}/libraw/libraw.h")
     message(FATAL_ERROR "Native RAW requires LibRaw 0.22.2; run engine/setup-libraw.ps1 (Windows) or engine/setup-libraw.sh (POSIX) and set SPEKTRALAB_LIBRAW_SOURCE")
 endif()
+
+# 2026-11-14: LibRaw 的两个逐像素大循环（scale_colors_loop / convert_to_rgb_loop）
+# 在原版是单线程，42MP 全幅各扫 1.27 亿像素 × 4 通道。开 /openmp 只对 AHD 去马赛克
+# 生效（那部分在 demosaic/*.cpp），这两个 loop 需要显式加 pragma。改动以整文件
+# 覆盖的方式保存在 engine/patches/ 下：configure 时若发现依赖树里的文件没打过标记，
+# 就自动覆盖一次，这样重新解压 LibRaw 之后也不会静默退化回单线程。
+set(_spk_libraw_omp_patch "${CMAKE_CURRENT_LIST_DIR}/../patches/LibRaw-0.22.2-postprocessing_utils.cpp")
+set(_spk_libraw_postproc "${SPEKTRALAB_LIBRAW_SOURCE}/src/postprocessing/postprocessing_utils.cpp")
+if(EXISTS "${_spk_libraw_omp_patch}" AND EXISTS "${_spk_libraw_postproc}")
+    file(READ "${_spk_libraw_postproc}" _spk_libraw_postproc_text)
+    string(FIND "${_spk_libraw_postproc_text}" "(X3Lumina)" _spk_libraw_patched)
+    if(_spk_libraw_patched EQUAL -1)
+        message(STATUS "LibRaw: applying X3Lumina OpenMP patch to postprocessing_utils.cpp")
+        configure_file("${_spk_libraw_omp_patch}" "${_spk_libraw_postproc}" COPYONLY)
+    endif()
+    unset(_spk_libraw_postproc_text)
+    unset(_spk_libraw_patched)
+endif()
 file(STRINGS "${SPEKTRALAB_LIBRAW_SOURCE}/libraw/libraw_version.h" libraw_version REGEX "^#define LIBRAW_(MAJOR|MINOR|PATCH)_VERSION")
 list(FIND libraw_version "#define LIBRAW_MAJOR_VERSION 0" libraw_major)
 list(FIND libraw_version "#define LIBRAW_MINOR_VERSION 22" libraw_minor)

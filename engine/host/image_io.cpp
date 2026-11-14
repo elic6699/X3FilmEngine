@@ -4,6 +4,7 @@
 #include <bit>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -802,6 +803,15 @@ bool decode_linear_prophoto(const fs::path& path, const DecodeOptions& options, 
                             ? spk::io::decode_raw_headroom(path, decoded, error)
                             : spk::io::decode_raw_compatible(path, custom_wb ? &mul : nullptr, decoded, error);
         if (!ok) return false;
+        /* SPK_TIMING=1：把 LibRaw 的三段拆开报出来（unpack = 读+解压+raw2image，
+         * process = 去马赛克 + scale_colors + convert_to_rgb）。 */
+        if (const char* t = std::getenv("SPK_TIMING"); t && *t && *t != '0')
+            std::fprintf(stderr,
+                         "spektralab-host info: raw timings open=%.0fms unpack=%.0fms "
+                         "process=%.0fms mem+float=%.0fms total=%.0fms\n",
+                         decoded.timings.open_ms, decoded.timings.unpack_ms,
+                         decoded.timings.process_ms, decoded.timings.convert_ms,
+                         decoded.timings.total_ms);
         out.width = decoded.width;
         out.height = decoded.height;
         out.rgb = std::move(decoded.rgb);   // LibRaw already applied the flip

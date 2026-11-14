@@ -11,12 +11,14 @@
 #include <lensfun.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 #include "platform.hpp"   // path_utf8
@@ -25,6 +27,25 @@ namespace fs = std::filesystem;
 
 namespace spkhost {
 namespace {
+
+/* 按行分块并行。lensfun 的三个 Apply* 都是 const、只读标定表，行与行之间
+ * 没有共享状态；每一行只写目标缓冲属于自己的一段，所以并行结果与单线程
+ * 逐位一致。42MP 全幅单线程几何重映射约 4.8 s，是通用 RAW 全幅最贵的一段。 */
+template <typename F>
+void parallel_rows(int rows, F&& body) {
+    const unsigned hw = std::thread::hardware_concurrency();
+    const unsigned threads = std::min<unsigned>(
+        hw ? hw : 1, std::min<unsigned>(8, std::max(1, rows / 32)));
+    if (threads <= 1) { body(0, rows); return; }
+    std::vector<std::thread> pool;
+    const int step = (rows + int(threads) - 1) / int(threads);
+    for (unsigned t = 0; t < threads; ++t) {
+        const int y0 = int(t) * step, y1 = std::min(rows, y0 + step);
+        if (y0 >= y1) break;
+        pool.emplace_back([&, y0, y1] { body(y0, y1); });
+    }
+    for (auto& th : pool) th.join();
+}
 
 struct DbState {
     std::mutex mu;
@@ -189,49 +210,52 @@ bool apply_lensfun(FloatImage& frame, const Metadata& meta,
     /* Stage 1: vignetting, in place, row by row (Lensfun's own examples do
        this to avoid alignment assumptions about a whole-frame buffer). */
     if (flags & LF_MODIFY_VIGNETTING) {
-        float* row = frame.rgb.data();
         const int stride = int(size_t(w) * 3 * sizeof(float));
-        for (int y = 0; y < h; ++y) {
-            mod.ApplyColorModification(row, 0.0f, float(y), w, 1,
-                                       LF_CR_3(RED, GREEN, BLUE), stride);
-            row += size_t(w) * 3;
-        }
+        parallel_rows(h, [&](int y0, int y1) {
+            for (int y = y0; y < y1; ++y) {
+                mod.ApplyColorModification(frame.rgb.data() + size_t(y) * size_t(w) * 3,
+                                           0.0f, float(y), w, 1,
+                                           LF_CR_3(RED, GREEN, BLUE), stride);
+            }
+        });
         out.applied = true;
     }
 
     /* Stages 2+3 in one pass: ApplySubpixelGeometryDistortion returns three
        (x,y) pairs per target pixel (R, G, B) in source pixel coordinates. */
     std::vector<float> dst(frame.rgb.size());
-    std::vector<float> coord(size_t(w) * 6);
     const float* src = frame.rgb.data();
-    bool remapped = false;
-    for (int y = 0; y < h; ++y) {
-        bool ok = mod.ApplySubpixelGeometryDistortion(0.0f, float(y), w, 1,
-                                                      coord.data());
-        if (!ok) {
-            /* Only geometry, no TCA: fall back to the single-pair routine. */
-            std::vector<float> one(size_t(w) * 2);
-            if (!mod.ApplyGeometryDistortion(0.0f, float(y), w, 1, one.data()))
+    std::atomic<bool> remapped{false};
+    parallel_rows(h, [&](int y0, int y1) {
+        std::vector<float> coord(size_t(w) * 6);
+        for (int y = y0; y < y1; ++y) {
+            bool ok = mod.ApplySubpixelGeometryDistortion(0.0f, float(y), w, 1,
+                                                          coord.data());
+            if (!ok) {
+                /* Only geometry, no TCA: fall back to the single-pair routine. */
+                std::vector<float> one(size_t(w) * 2);
+                if (!mod.ApplyGeometryDistortion(0.0f, float(y), w, 1, one.data()))
+                    continue;
+                for (int x = 0; x < w; ++x) {
+                    float sx = one[size_t(x) * 2], sy = one[size_t(x) * 2 + 1];
+                    float* d = dst.data() + (size_t(y) * w + x) * 3;
+                    d[0] = sample_channel(src, w, h, sx, sy, 0);
+                    d[1] = sample_channel(src, w, h, sx, sy, 1);
+                    d[2] = sample_channel(src, w, h, sx, sy, 2);
+                }
+                remapped = true;
                 continue;
+            }
             for (int x = 0; x < w; ++x) {
-                float sx = one[size_t(x) * 2], sy = one[size_t(x) * 2 + 1];
+                const float* c = coord.data() + size_t(x) * 6;
                 float* d = dst.data() + (size_t(y) * w + x) * 3;
-                d[0] = sample_channel(src, w, h, sx, sy, 0);
-                d[1] = sample_channel(src, w, h, sx, sy, 1);
-                d[2] = sample_channel(src, w, h, sx, sy, 2);
+                d[0] = sample_channel(src, w, h, c[0], c[1], 0);
+                d[1] = sample_channel(src, w, h, c[2], c[3], 1);
+                d[2] = sample_channel(src, w, h, c[4], c[5], 2);
             }
             remapped = true;
-            continue;
         }
-        for (int x = 0; x < w; ++x) {
-            const float* c = coord.data() + size_t(x) * 6;
-            float* d = dst.data() + (size_t(y) * w + x) * 3;
-            d[0] = sample_channel(src, w, h, c[0], c[1], 0);
-            d[1] = sample_channel(src, w, h, c[2], c[3], 1);
-            d[2] = sample_channel(src, w, h, c[4], c[5], 2);
-        }
-        remapped = true;
-    }
+    });
     if (remapped) {
         frame.rgb.swap(dst);
         out.applied = true;
