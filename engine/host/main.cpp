@@ -1046,7 +1046,7 @@ static std::vector<std::shared_ptr<GrawFrameCache>> g_grawCache;   /* 最近优�
  * 与 F 无关。拖 Fill Light 滑杆时只剩查表 + 采样，不重跑金字塔 ——
  * 对应 X3FCore 的 g_fl_slot_a/b/c（2026-10-22 的「apply 中间结果缓存」）。 */
 static std::mutex g_fillBaseMu;
-static spkhost::graw::FillBase g_fillBase;
+static std::shared_ptr<spkhost::graw::FillBase> g_fillBase;
 static std::string g_fillBaseKey;
 
 static std::string graw_cache_key(const fs::path& path, const DecodeOptions& o,
@@ -1190,19 +1190,26 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
              * 增益，所以曝光滑杆不会连带改变填充光的提亮量。 */
             std::vector<float> grawGain;
             if (dev.fill_light != 0.0) {
-                std::lock_guard<std::mutex> gfl(g_fillBaseMu);
-                if (g_fillBaseKey != cacheKey || !g_fillBase.valid()) {
-                    std::vector<float> base;
-                    linear_prophoto_to_linear_srgb(d.frame.rgb, w, h, base);
-                    if (spkhost::graw::fill_base_build(base.data(), int(w), int(h), g_fillBase))
-                        g_fillBaseKey = cacheKey;
-                    else {
-                        g_fillBase = spkhost::graw::FillBase();
-                        g_fillBaseKey.clear();
+                /* 基座只依赖未增益的线性帧；取到后立刻出锁，多线程导出只读共享。 */
+                std::shared_ptr<spkhost::graw::FillBase> fb;
+                {
+                    std::lock_guard<std::mutex> gfl(g_fillBaseMu);
+                    if (g_fillBaseKey != cacheKey || !g_fillBase || !g_fillBase->valid()) {
+                        auto nb = std::make_shared<spkhost::graw::FillBase>();
+                        std::vector<float> base;
+                        linear_prophoto_to_linear_srgb(d.frame.rgb, w, h, base);
+                        if (spkhost::graw::fill_base_build(base.data(), int(w), int(h), *nb)) {
+                            g_fillBase = nb;
+                            g_fillBaseKey = cacheKey;
+                        } else {
+                            g_fillBase.reset();
+                            g_fillBaseKey.clear();
+                        }
                     }
+                    fb = g_fillBase;
                 }
-                if (g_fillBase.valid())
-                    grawGain = spkhost::graw::fill_gain_from_base(g_fillBase, int(w), int(h),
+                if (fb && fb->valid())
+                    grawGain = spkhost::graw::fill_gain_from_base(*fb, int(w), int(h),
                                                                   dev.fill_light);
             }
             if (tone.exposure != 0.0) {
