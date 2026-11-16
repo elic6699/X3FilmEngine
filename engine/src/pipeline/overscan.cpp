@@ -1066,6 +1066,99 @@ double dot_matrix(const std::string& text, double h, Emit emit) {
     return std::max(0.0, x - pitch);
 }
 
+// --- 孔间数据 / the Pentax MZ-S data line (SpektraLab 2.4.0) -------------
+// One field per gap between perforations. The face is the 5x7 matrix made
+// bold (every stroke a column wider, as the strip's are), its zero unslashed,
+// in round dots that overlap along a row and down a column ("beaded"), on a
+// narrow cell: measured on a Gold 200 strip, 0.82 mm tall and the fields
+// 0.61 (P), 1.25 ([◆]), 1.40 (180), 1.13 (F8) and 1.83 mm (±0.0) long, so
+// the columns are 0.6 of the rows' pitch.
+// Its own glyphs beside the 5x7 set (not added to it, so no other line
+// changes): `±`, `"` and the three metering marks, which the host writes as
+// tokens. Multi-segment is the strip's `[◆]`, brackets round a filled
+// diamond; centre-weighted (a ring) and spot (a small dot) are drawn to the
+// same frame from the manual's icons -- UNCONFIRMED shapes.
+enum : char { kMzMulti = 1, kMzCenter = 2, kMzSpot = 3, kMzPlusMinus = 4, kMzSeconds = 5 };
+constexpr double kMzColumn = 0.6;
+
+std::string mzs_tokens(std::string s) {
+    const struct { const char* from; char to; } k[] = {
+        {"{meter:multi}", kMzMulti}, {"{meter:center}", kMzCenter}, {"{meter:spot}", kMzSpot},
+        {"\xC2\xB1", kMzPlusMinus}, {"\"", kMzSeconds},
+    };
+    for (const auto& r : k)
+        for (size_t p = s.find(r.from); p != std::string::npos; p = s.find(r.from, p + 1))
+            s.replace(p, std::strlen(r.from), 1, r.to);
+    return s;
+}
+
+// A glyph's rows (7, top first; '#' lit), its columns in `ncol`; null for a space.
+const char* const* mzs_glyph(char ch, int& ncol) {
+    static const char* const kMulti[7] = {"####...#...####", "##....###....##", "##...#####...##", "##..#######..##",
+                                          "##...#####...##", "##....###....##", "####...#...####"};
+    static const char* const kCenter[7] = {"####.......####", "##....###....##", "##...#...#...##", "##..#.....#..##",
+                                           "##...#...#...##", "##....###....##", "####.......####"};
+    static const char* const kSpot[7] = {"####.......####", "##...........##", "##.....#.....##", "##....###....##",
+                                         "##.....#.....##", "##...........##", "####.......####"};
+    static const char* const kPm[7] = {"..##..", "..##..", "######", "..##..", "..##..", "......", "######"};
+    static const char* const kSec[7] = {"##.##.", "##.##.", "##.##.", "......", "......", "......", "......"};
+    switch (ch) {
+        case kMzMulti: ncol = 15; return kMulti;
+        case kMzCenter: ncol = 15; return kCenter;
+        case kMzSpot: ncol = 15; return kSpot;
+        case kMzPlusMinus: ncol = 6; return kPm;
+        case kMzSeconds: ncol = 6; return kSec;
+        default: break;
+    }
+    static const uint8_t kZero[7] = {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E};
+    static char buf[7][7];
+    static const char* rows[7];
+    const uint8_t* g = ch == '0' ? kZero : glyph5x7(ch);
+    if (!g) return nullptr;
+    for (int r = 0; r < 7; ++r) {
+        const unsigned bits = (unsigned(g[r]) << 1) | g[r];          // bold: six columns
+        for (int c = 0; c < 6; ++c) buf[r][c] = (bits & (0x20u >> c)) ? '#' : '.';
+        buf[r][6] = 0;
+        rows[r] = buf[r];
+    }
+    ncol = 6;
+    return rows;
+}
+
+// Lays a field out with its ink centred on `s_c` and its foot on `foot_t`
+// (glyphs toward smaller t), each dot a disc. Returns the ink's length;
+// measures only with `out` null.
+double mzs_field(const std::string& text, double h, double s_c, double foot_t, std::vector<Op>* out) {
+    // dots 1.2 rows across, so the rows fuse as the strip's do; the ink is h tall
+    const double p = h / 7.2, cp = kMzColumn * p, r = 0.6 * p;
+    double lo = 1e30, hi = -1e30, x = 0.0;
+    std::vector<std::pair<double, double>> dots;
+    for (char ch : text) {
+        int ncol = 0;
+        const char* const* g = ch == ' ' ? nullptr : mzs_glyph(ch, ncol);
+        if (!g) { x += 4.0 * cp; continue; }
+        for (int row = 0; row < 7; ++row)
+            for (int c = 0; c < ncol; ++c)
+                if (g[row][c] == '#') {
+                    dots.push_back({x + c * cp, (6 - row) * p});
+                    lo = std::min(lo, x + c * cp);
+                    hi = std::max(hi, x + c * cp);
+                }
+        x += (ncol + 1) * cp;
+    }
+    if (dots.empty()) return 0.0;
+    const double len = hi - lo + 2.0 * r;
+    if (out)
+        for (const auto& d : dots) {
+            Op op;
+            op.kind = Op::Circle;
+            op.pts = {s_c - 0.5 * len + r + (d.first - lo), foot_t - r - d.second};
+            op.size_mm = r;
+            out->push_back(op);
+        }
+    return len;
+}
+
 // The DX film-edge bar code (ISO 1007, frame-number version): 31 modules in
 // 13 mm. Clock track, nearer the perforations: a 5-module bar, 23 single
 // modules alternating from white, a 3-module bar. Data track, at the film's
@@ -2044,6 +2137,12 @@ void imprint_groups(const OverscanLayout& L, const Params& params, double frame_
     const bool data_style = d.style == "data";
     const std::string date_text = data_style ? std::string() : d.text;
     const std::string data_text = data_style ? d.text : d.data_text;
+    // 孔间数据 (SpektraLab 2.4.0, the Pentax MZ-S line): `data_placement` puts
+    // the data line one field per gap between the perforations instead of in
+    // the gap between frames. `perfs` = the top rebate, `perfs_bottom` = the
+    // lower one, so a date on one edge and the data on the other both fit.
+    const bool perfs_bottom = d.data_placement == "perfs_bottom";
+    const bool perfs = (d.data_placement == "perfs" || perfs_bottom) && !data_text.empty();
     if (date_text.empty() && data_text.empty()) return;
     const std::string fmt = L.valid ? L.format : (o.format == "135_half" ? std::string("135_half") : std::string("135"));
     const bool is135 = fmt == "135" || fmt == "135_half";
@@ -2113,7 +2212,7 @@ void imprint_groups(const OverscanLayout& L, const Params& params, double frame_
         if (!L.valid) return;
         const double h = 0.55 * k;
         const double t_base = gt + gh + 0.30 + h;
-        if (!data_text.empty()) {
+        if (!data_text.empty() && !perfs) {   // 孔间数据是 135 的（120 无齿孔）
             const double s0 = gs + 0.08 * gw;
             draw(data_text, "data", h, [&](double x, double y, double& ss, double& tt) { ss = s0 + x; tt = t_base - y; });
         }
@@ -2134,9 +2233,41 @@ void imprint_groups(const OverscanLayout& L, const Params& params, double frame_
         const double t_c = gt + 0.5 * gh + 0.5 * w;
         draw(text, style, h, [&](double x, double y, double& ss, double& tt) { ss = s_c + 0.5 * h - y; tt = t_c - x; });
     };
-    const bool data_drawn = !data_text.empty() && L.valid;
+    const bool data_drawn = !data_text.empty() && L.valid && !perfs;
     if (data_drawn) between(data_text, "data", 0.50 * k, false);
-    if (!date_text.empty() && d.placement == "rebate" && L.valid) {
+    // 孔间 (perforation data): one field per gap between the holes, on the
+    // camera's top rebate or, with `perfs_bottom`, the lower one. Fields are
+    // `|`-separated; a field longer than the 2.77 mm gap loses words, then
+    // characters, from its end. Centred in each gap, the foot 0.76 mm off the
+    // gate; 0.82 mm tall at size 1 -- the strip's own MZ-S line.
+    auto perf_fields = [&](const std::string& text, char sep, bool bottom, double h) {
+        if (!L.perforated || L.perf_pitch <= 0.0) return;
+        const double pitch = L.perf_pitch, gap_w = pitch - L.perf_w, ph = L.perf_phase;
+        const int i0 = int(std::ceil((gs - ph) / pitch - 1e-9));
+        const double foot = bottom ? (gt + gh + 0.76 + h) : (gt - 0.76);
+        std::vector<std::string> fields;
+        size_t a = 0;
+        for (size_t b = text.find(sep); ; b = text.find(sep, a)) {
+            fields.push_back(text.substr(a, b == std::string::npos ? std::string::npos : b - a));
+            if (b == std::string::npos) break;
+            a = b + 1;
+        }
+        for (size_t j = 0; j < fields.size(); ++j) {
+            std::string tx = mzs_tokens(fields[j]);
+            while (!tx.empty() && mzs_field(tx, h, 0.0, 0.0, nullptr) > gap_w) {
+                const size_t cut = tx.rfind(' ');
+                tx = (cut != std::string::npos && cut > 0) ? tx.substr(0, cut) : tx.substr(0, tx.size() - 1);
+            }
+            if (tx.empty()) continue;
+            const double s_c = ph + double(i0 + int(j)) * pitch + 0.5 * (pitch + L.perf_w);
+            mzs_field(tx, h, s_c, foot, &g.ops);
+        }
+    };
+    if (perfs && L.valid) perf_fields(data_text, '|', perfs_bottom, 0.82 * k);
+    if (!date_text.empty() && (d.placement == "perf_top" || d.placement == "perf_bottom") && L.valid) {
+        // 日期印在另一条齿孔带的空隙里（一个词一项），与数据分居上下两缘。
+        perf_fields(date_text, ' ', d.placement == "perf_bottom", 0.82 * k);
+    } else if (!date_text.empty() && d.placement == "rebate" && L.valid) {
         between(date_text, d.style, 0.55 * k, data_drawn);
     } else if (!date_text.empty()) {
         // In the frame, at the chosen corner of the *film's* frame (the corner
@@ -2264,8 +2395,13 @@ bool Pipeline::node_overscan(const Image& in, Image& out, std::string& error) {
             error = "date_imprint: unknown corner '" + di.corner + "' (br, bl, tr, tl)";
             return false;
         }
-        if (di.placement != "frame" && di.placement != "rebate") {
-            error = "date_imprint: unknown placement '" + di.placement + "' (frame, rebate)";
+        if (di.placement != "frame" && di.placement != "rebate" &&
+            di.placement != "perf_top" && di.placement != "perf_bottom") {
+            error = "date_imprint: unknown placement '" + di.placement + "' (frame, rebate, perf_top, perf_bottom)";
+            return false;
+        }
+        if (di.data_placement != "gap" && di.data_placement != "perfs" && di.data_placement != "perfs_bottom") {
+            error = "date_imprint: unknown data_placement '" + di.data_placement + "' (gap, perfs, perfs_bottom)";
             return false;
         }
     }

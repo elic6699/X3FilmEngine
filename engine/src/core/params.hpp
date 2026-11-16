@@ -236,6 +236,15 @@ struct DateImprintParams {
     std::string corner = "br";       // frame placement: br | bl | tr | tl, in the film's frame (the camera held level)
     double inset_x = 3.0;            // mm from the gate's side to the text (frame placement)
     double inset_y = 2.4;            // mm from the gate's top/bottom to the text (frame placement)
+    // 孔间数据 Perforation Data (SpektraLab 2.4.0's fourth face; the Pentax
+    // MZ-S line): where `data_text` goes. `gap` = between frames, as before,
+    // byte for byte | `perfs` = one `|`-separated field per gap between the
+    // perforations on the top rebate | `perfs_bottom` = the same on the lower
+    // rebate, so a date and a data line can share the two edges of one frame.
+    std::string data_placement = "gap";
+    // The roll's leader block (MZ-S, before frame 1), `|`-separated, drawn
+    // only when `overscan.frame_number` is 1 and `data_placement` is `perfs`.
+    std::string data_leader;
 };
 
 struct FilmRenderParams {
