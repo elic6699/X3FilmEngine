@@ -1,23 +1,30 @@
 #!/usr/bin/env bash
 # setup-libraw.sh -- the POSIX twin of setup-libraw.ps1.
 #
-# Fetches the one LibRaw release the native RAW path is validated against
-# (0.22.2) into a gitignored dependency directory, and verifies it before it
-# is used:
+# Fetches the one LibRaw tree the native RAW path is validated against -- a
+# pinned commit of the project fork, https://github.com/elic6699/LibRaw -- into
+# a gitignored dependency directory, and verifies it before it is used:
 #
-#   1. the release zip from codeload.github.com, checked against the same
-#      SHA-256 setup-libraw.ps1 pins, before anything is extracted; or, when
-#      that host is unreachable (some egress proxies refuse it),
-#   2. a shallow `git clone` of the 0.22.2 tag, checked against the tag's
-#      commit id *and* its tree id -- a content hash over every file -- so a
-#      moved tag or a different tree is refused exactly as a bad zip is.
+#   1. the commit archive from codeload.github.com, checked against the
+#      SHA-256 pinned below (the same one setup-libraw.ps1 pins), before
+#      anything is extracted; or, when that host is unreachable (some egress
+#      proxies refuse it),
+#   2. a shallow fetch of that commit, checked against the commit id *and* its
+#      tree id -- a content hash over every file -- so a moved, rewritten or
+#      substituted commit is refused exactly as a bad archive is.
 #
 # An existing tree is re-verified and never overwritten, so a locally patched
 # LibRaw cannot silently become "the pinned source".
 #
 #   engine/setup-libraw.sh [deps-dir]      (default: <repo>/build/deps)
 #
-# The last line of stdout is the source directory, for SPEKTRALAB_LIBRAW_SOURCE.
+# The last line of stdout is the source directory, for SPEKTRALAB_LIBRAW_SOURCE;
+# it is also written to <deps-dir>/libraw-source.path, which build-host.sh and
+# cmake/LibRaw.cmake read, so the pin lives in exactly one place.
+#
+# Bumping the pin: update repo/commit/tree/archive_sha256/dirname here *and* in
+# setup-libraw.ps1, delete nothing by hand -- this script re-fetches a changed
+# dirname on its own and refuses a dirname whose tree no longer matches.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,56 +32,69 @@ deps="${1:-$here/../build/deps}"
 mkdir -p "$deps"
 deps="$(cd "$deps" && pwd)"
 
-version=0.22.2
-url="https://codeload.github.com/LibRaw/LibRaw/zip/refs/tags/$version"
-zip_sha256=02275a04cf0d1477ab9fd7ee231ddea59e7b14497458da6e3ba957517d6655c7
-git_url="https://github.com/LibRaw/LibRaw.git"
-git_commit=b93f6e45c194f5df9b02a43b1af9a54b4f41f33f
-git_tree=0fd7d10c62714db90d9fa922230916a030c2d6d3
-archive="$deps/LibRaw-$version.zip"
-source="$deps/LibRaw-$version"
+# The fork carries upstream LibRaw 0.22.x plus the project's own patches. The
+# commit is pinned, not the branch: master moves and would silently change RAW
+# decode between builds.
+repo="https://github.com/elic6699/LibRaw.git"
+commit=e419de08001de28ae6988ecb22df47e52b9c5eaa
+tree=0438e628aff29655551d6c56bae97d1274af9f1e
+archive_sha256=edd6198eb16e347645e8d967c9d6f83226ae8b65ca6e9862196f61db9d9c8506
+url="https://codeload.github.com/elic6699/LibRaw/zip/$commit"
+archive="$deps/LibRaw-$commit.zip"
+dirname=LibRaw-e419de0                # stable, short; see libraw-source.path
+source="$deps/$dirname"
 
 verify_git_tree() {   # $1 = a checkout; succeeds only on the pinned commit+tree, clean
   local dir="$1"
-  [[ "$(git -C "$dir" rev-parse HEAD)" == "$git_commit" ]] || return 1
-  [[ "$(git -C "$dir" rev-parse 'HEAD^{tree}')" == "$git_tree" ]] || return 1
+  [[ "$(git -C "$dir" rev-parse HEAD)" == "$commit" ]] || return 1
+  [[ "$(git -C "$dir" rev-parse 'HEAD^{tree}')" == "$tree" ]] || return 1
   [[ -z "$(git -C "$dir" status --porcelain --ignored)" ]] || return 1
 }
 
-verify_zip_tree() {   # the extracted tree against the verified archive, byte for byte
-  python3 - "$archive" "$deps" <<'PY'
+verify_zip_tree() {   # $1 = extracted tree; compared with the pinned archive, byte for byte
+  python3 - "$archive" "$1" <<'PY'
 import hashlib, os, sys, zipfile
-archive, deps = sys.argv[1], sys.argv[2]
+archive, target = sys.argv[1], os.path.abspath(sys.argv[2])
 z = zipfile.ZipFile(archive)
 expected = set()
 for info in z.infolist():
     if info.is_dir():
         continue
-    path = os.path.normpath(os.path.join(deps, info.filename))
+    rel = info.filename.split('/', 1)[1] if '/' in info.filename else info.filename
+    path = os.path.normpath(os.path.join(target, rel))
     expected.add(path)
     if not os.path.isfile(path):
         sys.exit(f"Incomplete LibRaw source tree: {path}")
     if hashlib.sha256(z.read(info)).digest() != hashlib.sha256(open(path, 'rb').read()).digest():
         sys.exit(f"Modified LibRaw source file: {path}. Existing files were not overwritten.")
-top = os.path.join(deps, z.namelist()[0].split('/')[0])
-for root, _, files in os.walk(top):
+for root, _, files in os.walk(target):
     for f in files:
         p = os.path.normpath(os.path.join(root, f))
-        if p not in expected:
-            sys.exit(f"Unexpected file in pinned LibRaw source: {p}")
+        if p in expected:
+            continue
+        # LibRaw's own Makefile.devel compiles in-tree (object/, lib/, bin/).
+        # Those outputs are regenerated by the build, carry no pinned source,
+        # and would otherwise make every re-run look like tampering. Every
+        # archive file is still compared byte for byte above.
+        rel = os.path.relpath(p, target).split(os.sep)
+        if rel[0] in ('object', 'lib', 'bin') or os.path.splitext(p)[1] in (
+                '.o', '.obj', '.a', '.lib', '.so', '.dylib', '.pdb', '.ilk'):
+            continue
+        sys.exit(f"Unexpected file in pinned LibRaw source: {p}")
 PY
 }
 
 if [[ -d "$source" ]]; then
   if [[ -d "$source/.git" ]]; then
-    verify_git_tree "$source" || { echo "LibRaw at $source is not the pinned, clean $version tree; not touched." >&2; exit 1; }
+    verify_git_tree "$source" || { echo "LibRaw at $source is not the pinned, clean $commit tree; not touched." >&2; exit 1; }
   elif [[ -f "$archive" ]]; then
-    verify_zip_tree
+    verify_zip_tree "$source"
   else
     echo "LibRaw at $source has no archive or git metadata to verify it against; remove it and re-run." >&2
     exit 1
   fi
-  echo "LibRaw $version: existing source verified." >&2
+  echo "LibRaw $commit: existing source verified." >&2
+  echo "$source" > "$deps/libraw-source.path"
   echo "$source"
   exit 0
 fi
@@ -86,32 +106,47 @@ rm -f "$archive.partial"
 
 if [[ -f "$archive" ]]; then
   actual="$(sha256sum "$archive" | cut -d' ' -f1)"
-  if [[ "$actual" != "$zip_sha256" ]]; then
+  if [[ "$actual" != "$archive_sha256" ]]; then
     echo "LibRaw archive checksum mismatch ($actual); nothing was extracted or changed." >&2
     exit 1
   fi
-  python3 - "$archive" "$deps" "$version" <<'PY'
+  staged="$source.partial"
+  rm -rf "$staged"
+  python3 - "$archive" "$deps" "$staged" <<'PY'
 import os, sys, zipfile
-archive, deps, version = sys.argv[1:]
+archive, deps, staged = sys.argv[1:]
 z = zipfile.ZipFile(archive)
+tops = {n.split('/', 1)[0] for n in z.namelist()}
+if len(tops) != 1:
+    sys.exit(f"LibRaw archive holds more than one top-level directory: {sorted(tops)}")
 for n in z.namelist():
-    parts = n.rstrip('/').split('/')
-    if parts[0] != f"LibRaw-{version}" or '..' in parts or n.startswith('/'):
+    if n.startswith('/') or '..' in n.split('/'):
         sys.exit(f"Unsafe LibRaw archive path: {n}")
-z.extractall(deps)
+z.extractall(staged)
 PY
-  echo "LibRaw $version: archive SHA256 verified and extracted." >&2
+  top="$(cd "$staged" && ls -A)"
+  [[ -n "$top" && -d "$staged/$top" ]] || { echo "LibRaw archive extracted to nothing." >&2; exit 1; }
+  extracted="$staged/$top"
+  verify_zip_tree "$extracted"
+  rm -rf "$source"
+  mv "$extracted" "$source"
+  rm -rf "$staged"
+  echo "LibRaw $commit: archive SHA256 verified and extracted." >&2
 else
-  echo "codeload.github.com unreachable; falling back to a pinned git clone." >&2
-  tmp="$source.partial"
-  rm -rf "$tmp"
-  git -c advice.detachedHead=false clone -q --depth 1 --branch "$version" "$git_url" "$tmp"
-  if ! verify_git_tree "$tmp"; then
-    rm -rf "$tmp"
-    echo "LibRaw git clone does not match the pinned commit $git_commit / tree $git_tree." >&2
+  echo "codeload.github.com unreachable; falling back to a pinned git fetch." >&2
+  staged="$source.partial"
+  rm -rf "$staged"
+  mkdir -p "$staged"
+  git -C "$staged" init -q
+  git -C "$staged" fetch -q --depth 1 "$repo" "$commit"
+  git -C "$staged" checkout -q FETCH_HEAD
+  if ! verify_git_tree "$staged"; then
+    rm -rf "$staged"
+    echo "LibRaw git fetch does not match the pinned commit $commit / tree $tree." >&2
     exit 1
   fi
-  mv "$tmp" "$source"
-  echo "LibRaw $version: git commit and tree id verified." >&2
+  mv "$staged" "$source"
+  echo "LibRaw $commit: git commit and tree id verified." >&2
 fi
+echo "$source" > "$deps/libraw-source.path"
 echo "$source"

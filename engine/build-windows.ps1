@@ -95,7 +95,15 @@ try {
     if ($Fresh) { $configureArguments = @('--fresh') + $configureArguments }
     $configureArguments += "-DSPEKTRALAB_BUILD_DESKTOP=$(if ($Desktop -and $NativeRaw) { 'ON' } else { 'OFF' })"
     if ($NativeRaw) {
-        if (-not $LibRawSourceDirectory) { $LibRawSourceDirectory = Join-Path $dependencyDirectory 'LibRaw-0.22.2' }
+        if (-not $LibRawSourceDirectory) {
+            # One copy of the pin: setup-libraw.ps1 records the verified tree here.
+            $pointer = Join-Path $dependencyDirectory 'libraw-source.path'
+            if (Test-Path -LiteralPath $pointer) {
+                $LibRawSourceDirectory = (Get-Content -LiteralPath $pointer -Raw).Trim()
+            } else {
+                $LibRawSourceDirectory = Join-Path $dependencyDirectory 'LibRaw-e419de0'
+            }
+        }
         if (-not (Test-Path -LiteralPath (Join-Path $LibRawSourceDirectory 'libraw\libraw.h'))) {
             throw 'LibRaw is missing; run engine/setup-libraw.ps1 first.'
         }

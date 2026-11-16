@@ -9,7 +9,7 @@
 #   SpektraLab, GPL-3.0-or-later            license/LICENSE
 #   spektrafilm (upstream engine), GPL-3.0  license/SPEKTRAFILM_LICENSE.txt
 #   profiles and LUTs, CC BY-SA 4.0         engine/resources/profiles, print LUTs
-#   LibRaw 0.22.2, LGPL-2.1 (of its LGPL/CDDL dual licence), statically linked
+#   LibRaw 0.22 series (project fork), LGPL-2.1 (of its LGPL/CDDL dual licence), statically linked
 #   stb (public domain / MIT), volk (MIT), Vulkan-Headers (Apache-2.0 OR MIT,
 #   compile time only)
 set -euo pipefail
@@ -17,6 +17,13 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
 build="$1"; stage="$2"; binary="$3"
 deps="${SPEKTRALAB_DEPS_DIR:-$repo/build/deps}"
+# One copy of the pin: setup-libraw.sh records the verified source tree here.
+libraw="${SPEKTRALAB_LIBRAW_SOURCE:-}"
+if [[ -z "$libraw" && -f "$deps/libraw-source.path" ]]; then
+  libraw="$(cat "$deps/libraw-source.path")"
+fi
+[[ -n "$libraw" && -f "$libraw/COPYRIGHT" ]] || {
+  echo "no pinned LibRaw source recorded in $deps -- run engine/setup-libraw.sh first" >&2; exit 1; }
 
 host="$build/engine/host/$binary"
 [[ -f "$host" ]] || { echo "no $host; build first" >&2; exit 1; }
@@ -34,8 +41,8 @@ cp "$repo/license/LICENSE" "$lic/SpektraLab-GPL-3.0.txt"
 cp "$repo/license/SPEKTRAFILM_LICENSE.txt" "$lic/spektrafilm-LICENSE.txt"
 cp "$repo/modern_UI/Spektrafilm/Spektrafilm/Resources/Licenses/Profiles-and-LUTs-CC-BY-SA-4.0.txt" "$lic/"
 cp "$repo/modern_UI/Spektrafilm/Spektrafilm/Resources/Licenses/Profiles-and-LUTs-CHANGELOG.txt" "$lic/"
-cp "$deps/LibRaw-0.22.2/LICENSE.LGPL" "$lic/LibRaw-LGPL-2.1.txt"
-cp "$deps/LibRaw-0.22.2/COPYRIGHT" "$lic/LibRaw-COPYRIGHT.txt"
+cp "$libraw/LICENSE.LGPL" "$lic/LibRaw-LGPL-2.1.txt"
+cp "$libraw/COPYRIGHT" "$lic/LibRaw-COPYRIGHT.txt"
 cp "$here/third_party/stb/LICENSE" "$lic/stb-LICENSE.txt"
 cp "$here/third_party/volk/LICENSE.md" "$lic/volk-LICENSE.txt"
 cp "$deps/Vulkan-Headers/LICENSE.md" "$lic/Vulkan-Headers-LICENSE.txt"
@@ -46,8 +53,9 @@ The full corresponding source is the SpektraLab repository at the commit
 this build was made from.
 
 Bundled third-party components:
-  LibRaw 0.22.2        LGPL-2.1, statically linked; source: libraw.org, and
-                       engine/setup-libraw.sh fetches the exact pinned tree.
+  LibRaw 0.22 series   LGPL-2.1, statically linked; source: github.com/elic6699/
+                       LibRaw, and engine/setup-libraw.sh fetches the exact
+                       pinned commit tree.
   stb_image, stb_image_write, stb_truetype   public domain / MIT (stb-LICENSE.txt)
   volk                 MIT (volk-LICENSE.txt)
   Vulkan-Headers       Apache-2.0 OR MIT, compile time only

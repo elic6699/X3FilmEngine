@@ -35,10 +35,16 @@ by publishing it rather than by a written offer alone.
 macOS（Metal）：
 
 ```bash
-engine/setup-libraw.sh     # LibRaw 0.22.2，pinned，落 build/deps
+engine/setup-libraw.sh     # LibRaw 0.22 线（本项目 fork，pinned），落 build/deps
+make -C build/deps/LibRaw-e419de0 -f Makefile.devel library -j8   # lib/libraw.a
 engine/build.sh            # 引擎静态库 + spektrafilm.metallib + 测试驱动
 engine/build-host.sh       # spektralab-host（产物落 engine/build/）
 ```
+
+`setup-libraw.sh` 把源码落在 `build/deps/LibRaw-e419de0`（fork 提交
+`e419de08`）并把路径写进 `build/deps/libraw-source.path`；`build-host.sh`、
+`cmake/LibRaw.cmake`、`stage-host.sh` 都从这一处读，pin 只有一份。手工改
+过那棵树会被脚本拒绝，不会被当成 pinned 源静默使用。
 
 三步都要，缺任一步 `build-host.sh` 会直接报出缺哪个前置产物。宿主进程
 `spektralab-host` 的 macOS 链接命令行在 `engine/build-host.sh` 里（源文件：
@@ -73,7 +79,7 @@ Linux / Windows 的构建路径（Vulkan 后端）见 `engine/LINUX_WINDOWS.md`�
   [`license/SPEKTRAFILM_LICENSE.txt`](license/SPEKTRAFILM_LICENSE.txt)。
 - **`engine/resources_product/`**：产品自有数据，由厂商公开数据表拟合，
   说明见 `engine/resources_product/NOTICE.md`。
-- **第三方库**：LibRaw 0.22.2（LGPL-2.1，静态链接）、stb（`engine/third_party/stb/LICENSE`，
+- **第三方库**：LibRaw 0.22 系列（项目 fork 提交 `e419de08`，LGPL-2.1，静态链接）、stb（`engine/third_party/stb/LICENSE`，
   public domain 或 MIT，本树取 MIT）、volk（MIT，`engine/third_party/volk/LICENSE.md`）、
   metal-cpp（Apache-2.0）、Vulkan-Headers（Apache-2.0 OR MIT，仅 Linux/Windows 构建），
   汇总见 `engine/third_party/README.md`。

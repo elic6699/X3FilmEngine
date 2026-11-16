@@ -45,11 +45,15 @@ The [Win32 viewer](WINDOWS_DESKTOP.md) uses the same decoder and TIFF writer.
 
 ## Dependency and deployment
 
-The dependency is official [LibRaw 0.22.2](https://github.com/LibRaw/LibRaw/releases/tag/0.22.2),
-using the [fixed source archive](https://codeload.github.com/LibRaw/LibRaw/zip/refs/tags/0.22.2)
-with SHA-256 `02275a04cf0d1477ab9fd7ee231ddea59e7b14497458da6e3ba957517d6655c7`.
-`setup-libraw.ps1` verifies it before extraction. CMake does not fetch mutable
-dependencies. Build manifests record source and runtime hashes.
+The dependency is the project fork of LibRaw,
+[github.com/elic6699/LibRaw](https://github.com/elic6699/LibRaw), pinned to
+commit `e419de08001de28ae6988ecb22df47e52b9c5eaa` (upstream 0.22 development
+line), using the
+[archive of that commit](https://codeload.github.com/elic6699/LibRaw/zip/e419de08001de28ae6988ecb22df47e52b9c5eaa)
+with SHA-256 `edd6198eb16e347645e8d967c9d6f83226ae8b65ca6e9862196f61db9d9c8506`.
+`setup-libraw.ps1` verifies it before extraction, and the commit is pinned --
+never a branch. CMake does not fetch mutable dependencies. Build manifests
+record source and runtime hashes.
 
 The build selects LibRaw's LGPL-2.1 licence option and deploys `LICENSE.LGPL`
 and `COPYRIGHT` under the output's `third-party/LibRaw` directory. Preserve
