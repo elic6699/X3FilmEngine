@@ -130,6 +130,7 @@ public:
                 if (p.layout) vkDestroyPipelineLayout(device_, p.layout, nullptr);
                 if (p.descriptors) vkDestroyDescriptorSetLayout(device_, p.descriptors, nullptr);
             }
+            if (descriptor_pool_) vkDestroyDescriptorPool(device_, descriptor_pool_, nullptr);
             if (command_pool_) vkDestroyCommandPool(device_, command_pool_, nullptr);
             vkDestroyDevice(device_, nullptr);
         }
@@ -236,6 +237,27 @@ public:
         pool_create.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         result = vkCreateCommandPool(device_, &pool_create, nullptr, &command_pool_);
         if (result != VK_SUCCESS) { error = vk_error("vkCreateCommandPool", result); return false; }
+
+        // 持久 command buffer：command_pool_ 带 RESET_COMMAND_BUFFER_BIT，
+        // submit_sync 每次 reset 复用，不再逐次 alloc/free。
+        VkCommandBufferAllocateInfo cb_alloc{};
+        cb_alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cb_alloc.commandPool = command_pool_;
+        cb_alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cb_alloc.commandBufferCount = 1;
+        result = vkAllocateCommandBuffers(device_, &cb_alloc, &command_buffer_);
+        if (result != VK_SUCCESS) { error = vk_error("vkAllocateCommandBuffers", result); return false; }
+
+        // 持久 descriptor pool：最大 kernel binding 为 8（spk_grain_layers /
+        // spk_grain_layer_one），maxSets=1 足够 —— dispatch 串行、每次 reset。
+        VkDescriptorPoolSize desc_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8};
+        VkDescriptorPoolCreateInfo desc_pool{};
+        desc_pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        desc_pool.maxSets = 1;
+        desc_pool.poolSizeCount = 1;
+        desc_pool.pPoolSizes = &desc_size;
+        result = vkCreateDescriptorPool(device_, &desc_pool, nullptr, &descriptor_pool_);
+        if (result != VK_SUCCESS) { error = vk_error("vkCreateDescriptorPool", result); return false; }
         return true;
     }
 
@@ -573,25 +595,19 @@ public:
         ComputePipeline* pipeline = get_pipeline(*spec, error);
         if (!pipeline) return false;
 
-        VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, spec->bindings};
-        VkDescriptorPoolCreateInfo pool_create{};
-        pool_create.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pool_create.maxSets = 1;
-        pool_create.poolSizeCount = 1;
-        pool_create.pPoolSizes = &pool_size;
-        VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
-        VkResult result = vkCreateDescriptorPool(device_, &pool_create, nullptr, &descriptor_pool);
-        if (result != VK_SUCCESS) { error = vk_error("vkCreateDescriptorPool", result); return false; }
+        // 持久 descriptor pool：串行 dispatch 每次 reset 复用，不再逐次
+        // create/destroy（一张图 30-60 次调度省 60-120 次驱动层分配）。
+        VkResult result = vkResetDescriptorPool(device_, descriptor_pool_, 0);
+        if (result != VK_SUCCESS) { error = vk_error("vkResetDescriptorPool", result); return false; }
         VkDescriptorSetAllocateInfo set_alloc{};
         set_alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        set_alloc.descriptorPool = descriptor_pool;
+        set_alloc.descriptorPool = descriptor_pool_;
         set_alloc.descriptorSetCount = 1;
         set_alloc.pSetLayouts = &pipeline->descriptors;
         VkDescriptorSet set = VK_NULL_HANDLE;
         result = vkAllocateDescriptorSets(device_, &set_alloc, &set);
         if (result != VK_SUCCESS) {
             error = vk_error("vkAllocateDescriptorSets", result);
-            vkDestroyDescriptorPool(device_, descriptor_pool, nullptr);
             return false;
         }
         std::vector<VkWriteDescriptorSet> writes(args.size());
@@ -618,7 +634,6 @@ public:
                                         0, 1, &set, 0, nullptr);
                 vkCmdDispatch(command, uint32_t(groups_x), uint32_t(groups_y), 1);
             }, "Vulkan compute dispatch", error);
-        vkDestroyDescriptorPool(device_, descriptor_pool, nullptr);
         if (trace_dispatch) {
             std::fprintf(stderr, "[spk] <- %s\n", kernel);
             std::fflush(stderr);
@@ -713,13 +728,11 @@ private:
     // completion before any staging allocation or pooled buffer can be reused.
     template <typename Record>
     bool submit_sync(Record&& record, const char* operation, std::string& error) {
-        VkCommandBufferAllocateInfo allocate_info{};
-        allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocate_info.commandPool = command_pool_;
-        allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocate_info.commandBufferCount = 1;
-        VkCommandBuffer command = VK_NULL_HANDLE;
-        VkResult result = vkAllocateCommandBuffers(device_, &allocate_info, &command);
+        // 调用方持 dispatch_mutex_：command_buffer_ 串行复用，reset 后重录。
+        // 与旧版逐次 alloc/free 相比只是省驱动层分配；提交 + WaitIdle 的
+        // 同步语义一字未改，图像逐位结果不变。
+        VkCommandBuffer command = command_buffer_;
+        VkResult result = vkResetCommandBuffer(command, 0);
         if (result == VK_SUCCESS) {
             VkCommandBufferBeginInfo begin{};
             begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -737,7 +750,6 @@ private:
                 result = vkQueueSubmit(queue_, 1, &submit, VK_NULL_HANDLE);
                 if (result == VK_SUCCESS) result = vkQueueWaitIdle(queue_);
             }
-            vkFreeCommandBuffers(device_, command_pool_, 1, &command);
         }
         if (result != VK_SUCCESS) { error = vk_error(operation, result); return false; }
         return true;
@@ -1049,6 +1061,13 @@ private:
     VkQueue queue_ = VK_NULL_HANDLE;
     uint32_t queue_family_ = 0;
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
+    /* 持久 command buffer + descriptor pool：原先每次 dispatch/upload/read
+     * 都 vkAllocateCommandBuffers + vkCreateDescriptorPool 并在末尾销毁，
+     * 一张图 30-60 次调度就是 60-120 次驱动层分配/释放（2-12ms）。两者都在
+     * dispatch_mutex_ 下串行复用，每帧 reset 后重填，提交语义不变（仍同步
+     * WaitIdle），因此不改变任何数据依赖或图像的逐位结果。 */
+    VkCommandBuffer command_buffer_ = VK_NULL_HANDLE;
+    VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     std::unordered_map<std::string, ComputePipeline> pipelines_;
     mutable std::mutex buffers_mutex_;
     std::mutex dispatch_mutex_;

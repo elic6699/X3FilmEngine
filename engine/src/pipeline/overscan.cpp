@@ -1547,6 +1547,7 @@ bool rasterise(const OverscanLayout& L, const Group& g, std::vector<float>& cov,
         int fi = -1;
         double hsc = 1.0, advs = 1.0;
         std::vector<double> pens;      // pen x (mm) of each glyph along the baseline
+        std::vector<const edge_win::Glyph*> glyphs;  // 每字符的 glyph，预取一次避免像素内层 map 查找
         if (op.kind == Op::Poly) {
             film = op.pts;
         } else if (op.kind == Op::Circle) {
@@ -1568,8 +1569,14 @@ bool rasterise(const OverscanLayout& L, const Group& g, std::vector<float>& cov,
             hsc = op.hscale;
             advs = op.scale_advances ? op.hscale : 1.0;
             double pen = 0.0;
+            glyphs.reserve(op.text.size());
             for (char ch : op.text) {
                 pens.push_back(pen);
+                const int cp = static_cast<unsigned char>(ch);
+                // GlyphCache 是 std::map（节点稳定），这里预取后缓存指针，
+                // 像素×字符内层循环不再逐次做 map::find + pair 构造。
+                glyphs.push_back(&edge_win::get_glyph(
+                    *fonts[fi].f, fonts[fi].s_px, cp, fi, glyph_cache));
                 pen += edge_win::advance_mm(*fonts[fi].f, static_cast<unsigned char>(ch), op.size_mm)
                        + op.tracking_mm;
             }
@@ -1593,10 +1600,8 @@ bool rasterise(const OverscanLayout& L, const Group& g, std::vector<float>& cov,
                     const double ds = s - op.s, dt = t - op.t;
                     const double u =  cr * ds + sr * dt;
                     const double v = -sr * ds + cr * dt;
-                    for (size_t k = 0; k < op.text.size(); ++k) {
-                        const int cp = static_cast<unsigned char>(op.text[k]);
-                        const edge_win::Glyph& g =
-                            edge_win::get_glyph(*fonts[fi].f, fonts[fi].s_px, cp, fi, glyph_cache);
+                    for (size_t k = 0; k < glyphs.size(); ++k) {
+                        const edge_win::Glyph& g = *glyphs[k];
                         if (g.px.empty()) continue;
                         const double gx = (u - advs * pens[k]) / hsc;
                         const double uu = gx * ppm - g.xoff;
