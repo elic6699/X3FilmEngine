@@ -9,7 +9,8 @@
 #   SpektraLab, GPL-3.0-or-later            license/LICENSE
 #   spektrafilm (upstream engine), GPL-3.0  license/SPEKTRAFILM_LICENSE.txt
 #   profiles and LUTs, CC BY-SA 4.0         engine/resources/profiles, print LUTs
-#   LibRaw 0.22.2, LGPL-2.1 (of its LGPL/CDDL dual licence), statically linked
+#   LibRaw 0.22.3 (fork elic6699/LibRaw), LGPL-2.1 (of its LGPL/CDDL dual
+#   licence), statically linked
 #   stb (public domain / MIT), volk (MIT), Vulkan-Headers (Apache-2.0 OR MIT,
 #   compile time only)
 set -euo pipefail
