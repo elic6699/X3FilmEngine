@@ -158,7 +158,8 @@ if(NOT APPLE)
 
         if(SPEKTRALAB_BUILD_NATIVE_RAW)
             include(cmake/LibRaw.cmake)
-            add_library(spk_image_io STATIC src/io/raw_decoder.cpp src/io/raw_headroom.cpp)
+            add_library(spk_image_io STATIC src/io/raw_decoder.cpp src/io/raw_headroom.cpp
+                                             src/io/highlight_reconstruct.cpp)
             if(WIN32)
                 target_sources(spk_image_io PRIVATE src/io/image_writer.cpp)
             endif()

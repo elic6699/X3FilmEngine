@@ -64,6 +64,11 @@ struct DecodeOptions {
     // Generic RAW only: rectify distortion / TCA / vignetting with Lensfun
     // after LibRaw decode. Ignored by the engine session (X3F/film) path.
     bool lens_correction = false;
+    // Generic RAW only: inpaint-opposed highlight reconstruction, 0..1.
+    // 0 (the default) keeps the byte-for-byte compatible16 output. >0 switches
+    // the frame to an unclamped float exit and rebuilds clipped channels from
+    // their opposing channels before the colour matrix.
+    double highlight_reconstruct = 0.0;
 };
 // Thrown as a plain error string prefixed "unsupported:" when a decode option
 // cannot be honoured for this file.

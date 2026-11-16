@@ -448,6 +448,21 @@ DecodeOptions decode_options(const Json& decode) {
             // lensfun_correction.cpp. Missing database/profile is a no-op,
             // reported in the decode_raw_frame result.
             options.lens_correction = kv.second.as_bool(false);
+        } else if (kv.first == "highlight_reconstruct") {
+            // inpaint-opposed 高光重建（0..1）。布尔写法等价于 0/1，方便
+            // 只想要开关的宿主。
+            const Json& value = kv.second;
+            double strength = 0.0;
+            if (value.is_bool())
+                strength = value.as_bool(false) ? 1.0 : 0.0;
+            else if (value.is_number())
+                strength = value.as_double(0.0);
+            else
+                throw HostError{"bad_request",
+                                "decode.highlight_reconstruct must be a number 0..1 or a boolean"};
+            if (!(strength >= 0.0 && strength <= 1.0))
+                throw HostError{"bad_request", "decode.highlight_reconstruct must be 0..1"};
+            options.highlight_reconstruct = strength;
         } else {
             throw HostError{"unsupported", "decode." + kv.first + " is not supported by this host"};
         }
@@ -1104,13 +1119,13 @@ static std::string graw_cache_key(const fs::path& path, const DecodeOptions& o,
     const uint64_t size = uint64_t(fs::file_size(path, ec));
     const uint64_t mtime = ec ? 0 : uint64_t(
         fs::last_write_time(path, ec).time_since_epoch().count());
-    char b[256];
-    std::snprintf(b, sizeof(b), "|%llu|%llu|%s|%.4f|%.4f|%d|%u",
+    char b[320];
+    std::snprintf(b, sizeof(b), "|%llu|%llu|%s|%.4f|%.4f|%d|%.3f|%u",
                   (unsigned long long)size, (unsigned long long)mtime,
                   o.raw_mode.c_str(),
                   o.temperature_k ? *o.temperature_k : 0.0,
                   o.tint ? *o.tint : 0.0,
-                  o.lens_correction ? 1 : 0, long_edge);
+                  o.lens_correction ? 1 : 0, o.highlight_reconstruct, long_edge);
     return path_utf8(path) + b;
 }
 
@@ -1406,6 +1421,10 @@ Json m_decode_raw_frame(const Request& q, std::vector<uint8_t>& payload) {
     if (!lc.focal.empty())  lens.set("focal", str(lc.focal));
     if (!lc.reason.empty()) lens.set("reason", str(lc.reason));
     r.set("lens_correction", std::move(lens));
+    Json hlr = Json::object();
+    hlr.set("strength", number(options.highlight_reconstruct));
+    hlr.set("applied", Json(options.highlight_reconstruct > 0.0));
+    r.set("highlight_reconstruct", std::move(hlr));
     return r;
 }
 

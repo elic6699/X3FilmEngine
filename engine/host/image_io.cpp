@@ -790,10 +790,6 @@ bool decode_linear_prophoto(const fs::path& path, const DecodeOptions& options, 
         spk::io::DecodedRaw decoded;
         std::array<float, 4> mul{};
         if (custom_wb) {
-            if (options.raw_mode == "headroom") {
-                error = std::string(kUnsupportedPrefix) + "a custom white balance is not available in headroom mode";
-                return false;
-            }
             auto raw = std::make_unique<LibRaw>(LIBRAW_OPTIONS_NO_DATAERR_CALLBACK);
             if (!raw_open(*raw, path, error)) return false;
             if (!multipliers_for(*raw, *options.temperature_k, options.tint.value_or(0.0), mul, error)) {
@@ -802,11 +798,14 @@ bool decode_linear_prophoto(const fs::path& path, const DecodeOptions& options, 
             }
         }
         const bool ok = options.raw_mode == "headroom"
-                            ? spk::io::decode_raw_headroom(path, decoded, error)
+                            ? spk::io::decode_raw_headroom(path, decoded, error,
+                                                           options.highlight_reconstruct,
+                                                           custom_wb ? &mul : nullptr)
                             : options.raw_mode == "mono"
                                 ? spk::io::decode_raw_monochrome(path, decoded, error)
                                 : spk::io::decode_raw_compatible(
-                                      path, custom_wb ? &mul : nullptr, decoded, error);
+                                      path, custom_wb ? &mul : nullptr, decoded, error,
+                                      options.highlight_reconstruct);
         if (!ok) return false;
         /* SPK_TIMING=1：把 LibRaw 的三段拆开报出来（unpack = 读+解压+raw2image，
          * process = 去马赛克 + scale_colors + convert_to_rgb）。 */
@@ -817,6 +816,14 @@ bool decode_linear_prophoto(const fs::path& path, const DecodeOptions& options, 
                          decoded.timings.open_ms, decoded.timings.unpack_ms,
                          decoded.timings.process_ms, decoded.timings.convert_ms,
                          decoded.timings.total_ms);
+        if (decoded.metadata.highlight_reconstruct > 0.0 &&
+            (std::getenv("SPK_TIMING") || std::getenv("X3L_SPK_LOG")))
+            std::fprintf(stderr,
+                         "spektralab-host info: highlight reconstruct strength=%.2f "
+                         "clipped=%llu applied=%d\n",
+                         decoded.metadata.highlight_reconstruct,
+                         (unsigned long long)decoded.metadata.highlight_clipped_pixels,
+                         decoded.metadata.highlight_reconstruct_applied ? 1 : 0);
         out.width = decoded.width;
         out.height = decoded.height;
         out.rgb = std::move(decoded.rgb);   // LibRaw already applied the flip

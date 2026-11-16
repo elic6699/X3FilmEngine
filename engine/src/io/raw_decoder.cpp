@@ -1,4 +1,5 @@
 #include "raw_decoder.hpp"
+#include "highlight_reconstruct.hpp"
 #include "raw_headroom.hpp"
 
 #include <libraw/libraw.h>
@@ -177,6 +178,9 @@ public:
     double conversion_ms = 0.0;
     bool conversion_finished = false;
     std::string conversion_error;
+    // >0 时在颜色矩阵之前插入 inpaint-opposed 高光重建（见 highlight_reconstruct.hpp）。
+    double highlight_reconstruct = 0.0;
+    detail::ReconstructResult reconstruct_result;
 
 protected:
     void convert_to_rgb_loop(float out_cam[3][4]) override {
@@ -195,14 +199,77 @@ protected:
             for (unsigned col = 0; col < 4; ++col)
                 matrix[row * 4 + col] = out_cam[row][col];
         const auto& sizes = imgdata.sizes;
-        conversion_finished = detail::convert_camera_rgb_headroom(
-            imgdata.image[0], std::size_t(sizes.width) * sizes.height,
-            sizes.width, sizes.height, sizes.flip, matrix, exposure_restore,
-            converted, converted_width, converted_height, conversion_error);
+        if (highlight_reconstruct > 0.0) {
+            // highlight=1 把白平衡归一化到最大乘数，于是每个通道的物理饱和点
+            // 落在 65535 * pre_mul[c]；pre_mul 此时已是 max-normalised（<=1），
+            // 直接按它逐通道缩放裁剪判据。
+            std::array<float, 3> clips{};
+            for (int c = 0; c < 3; ++c) {
+                const float wb = std::clamp(applied_wb[std::size_t(c)], 1.0f / 32.0f, 1.0f);
+                clips[std::size_t(c)] = detail::kHilightMagic * wb;
+            }
+            conversion_finished = detail::convert_camera_rgb_opposed(
+                imgdata.image[0], std::size_t(sizes.width) * sizes.height,
+                sizes.width, sizes.height, sizes.flip, matrix, exposure_restore, clips,
+                highlight_reconstruct, converted, converted_width, converted_height,
+                &reconstruct_result, conversion_error);
+        } else {
+            conversion_finished = detail::convert_camera_rgb_headroom(
+                imgdata.image[0], std::size_t(sizes.width) * sizes.height,
+                sizes.width, sizes.height, sizes.flip, matrix, exposure_restore,
+                converted, converted_width, converted_height, conversion_error);
+        }
         conversion_ms = elapsed_ms(start);
         // dcraw_process may continue its bookkeeping; no clipped uint16 output
         // is subsequently used, and the supported square-pixel Bayer inputs
         // require no post-conversion geometric resampling.
+    }
+};
+
+// compatible16 约定的浮点出口：只在高光重建开启时使用。
+//
+// 与 HeadroomLibRaw 的差别只有白平衡归一化基准（这里保持 highlight=0，即
+// scale_colors 以最小乘数为 1，compatible16 的既有口径）与输出不夹取。
+// 之所以必须绕开 uint16：重建值常常高过白点，dcraw_make_mem_image 的 CLIP
+// 会把它截回 65535，等于没重建。
+class ReconstructCompatLibRaw final : public LibRaw {
+public:
+    explicit ReconstructCompatLibRaw(double strength)
+        : LibRaw(LIBRAW_OPTIONS_NO_DATAERR_CALLBACK), highlight_reconstruct(strength) {}
+
+    std::vector<float> converted;
+    std::uint32_t converted_width = 0, converted_height = 0;
+    double conversion_ms = 0.0;
+    bool conversion_finished = false;
+    std::string conversion_error;
+    double highlight_reconstruct = 0.0;
+    detail::ReconstructResult reconstruct_result;
+
+protected:
+    void convert_to_rgb_loop(float out_cam[3][4]) override {
+        const auto start = Clock::now();
+        if (libraw_internal_data.internal_output_params.raw_color ||
+            imgdata.idata.colors != 3 || !imgdata.image) {
+            conversion_error =
+                "RAW reconstruct: no supported three-channel camera-to-output transform";
+            return;
+        }
+        std::array<float, 12> matrix{};
+        for (unsigned row = 0; row < 3; ++row)
+            for (unsigned col = 0; col < 4; ++col)
+                matrix[row * 4 + col] = out_cam[row][col];
+        // highlight=0 的 scale_colors 以最小白平衡乘数为 1 归一化，三个通道撞
+        // uint16 上限的位置因此不在同一物理点；但对重建来说判据只需要"值是否
+        // 已经到顶、不再携带信息"，统一用 0.987 即可（逐通道 clip 只影响
+        // soft-clip 渐入的起点，对识别无损）。
+        const std::array<float, 3> clips{detail::kHilightMagic, detail::kHilightMagic,
+                                         detail::kHilightMagic};
+        const auto& sizes = imgdata.sizes;
+        conversion_finished = detail::convert_camera_rgb_opposed(
+            imgdata.image[0], std::size_t(sizes.width) * sizes.height, sizes.width,
+            sizes.height, sizes.flip, matrix, 1.0, clips, highlight_reconstruct, converted,
+            converted_width, converted_height, &reconstruct_result, conversion_error);
+        conversion_ms = elapsed_ms(start);
     }
 };
 
@@ -214,7 +281,8 @@ bool decode_raw_compatible(const std::filesystem::path& source,
 }
 
 bool decode_raw_compatible(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
-                           DecodedRaw& out, std::string& error) {
+                           DecodedRaw& out, std::string& error,
+                           double highlight_reconstruct) {
     error.clear();
     const auto total_start = Clock::now();
     try {
@@ -222,8 +290,21 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
             error = "RAW open: source path is empty";
             return false;
         }
+        if (!std::isfinite(highlight_reconstruct) || highlight_reconstruct < 0.0 ||
+            highlight_reconstruct > 1.0) {
+            error = "RAW reconstruct: highlight reconstruction strength must be 0..1";
+            return false;
+        }
         // LibRaw carries substantial metadata; keep it off the Windows stack.
-        auto raw = std::make_unique<LibRaw>(LIBRAW_OPTIONS_NO_DATAERR_CALLBACK);
+        std::unique_ptr<LibRaw> raw;
+        ReconstructCompatLibRaw* reconstruct = nullptr;
+        if (highlight_reconstruct > 0.0) {
+            auto owned = std::make_unique<ReconstructCompatLibRaw>(highlight_reconstruct);
+            reconstruct = owned.get();
+            raw = std::move(owned);
+        } else {
+            raw = std::make_unique<LibRaw>(LIBRAW_OPTIONS_NO_DATAERR_CALLBACK);
+        }
         configure_compatible(raw->imgdata.params);
         if (user_mul) {
             // A caller-chosen white balance (the host's Temperature/Tint):
@@ -285,6 +366,34 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
                 decoded.metadata.rgb_cam[row * 4 + col] = color.rgb_cam[row][col];
         decoded.metadata.postprocess_black = color.black;
         decoded.metadata.postprocess_maximum = color.maximum;
+
+        // Opt-in float exit (highlight reconstruction). dcraw_make_mem_image()
+        // would CLIP the reconstructed values back to 65535, so the conversion
+        // result captured inside convert_to_rgb_loop is used instead. The scale
+        // is compatible16's: 1.0 is the white point, negatives from the matrix
+        // are preserved, values above one are the reconstruction headroom.
+        if (reconstruct) {
+            if (!reconstruct->conversion_finished) {
+                error = reconstruct->conversion_error.empty()
+                            ? "RAW reconstruct: float colour conversion did not run"
+                            : reconstruct->conversion_error;
+                return false;
+            }
+            decoded.metadata.highlight_reconstruct = highlight_reconstruct;
+            decoded.metadata.highlight_reconstruct_applied =
+                reconstruct->reconstruct_result.any_clipped;
+            decoded.metadata.highlight_clipped_pixels =
+                reconstruct->reconstruct_result.clipped_pixels;
+            decoded.width = reconstruct->converted_width;
+            decoded.height = reconstruct->converted_height;
+            decoded.rgb = std::move(reconstruct->converted);
+            decoded.timings.convert_ms = reconstruct->conversion_ms;
+            decoded.timings.process_ms = std::max(
+                0.0, decoded.timings.process_ms - reconstruct->conversion_ms);
+            decoded.timings.total_ms = elapsed_ms(total_start);
+            out = std::move(decoded);
+            return true;
+        }
 
         // This also performs LibRaw's final orientation and identity gamma
         // lookup. Reading imgdata.image directly would omit those semantics.
@@ -461,7 +570,9 @@ bool decode_raw_monochrome(const std::filesystem::path& source,
 }
 
 bool decode_raw_headroom(const std::filesystem::path& source,
-                         DecodedRaw& out, std::string& error) {
+                         DecodedRaw& out, std::string& error,
+                         double highlight_reconstruct,
+                         const std::array<float, 4>* user_mul) {
     error.clear();
     const auto total_start = Clock::now();
     try {
@@ -469,11 +580,31 @@ bool decode_raw_headroom(const std::filesystem::path& source,
             error = "RAW open: source path is empty";
             return false;
         }
+        if (!std::isfinite(highlight_reconstruct) || highlight_reconstruct < 0.0 ||
+            highlight_reconstruct > 1.0) {
+            error = "RAW reconstruct: highlight reconstruction strength must be 0..1";
+            return false;
+        }
         auto raw = std::make_unique<HeadroomLibRaw>();
         configure_compatible(raw->imgdata.params);
         // LibRaw's Ignore mode prevents WB multipliers above one, but does not
         // reconstruct sensor saturation and still uses uint16 intermediates.
         raw->imgdata.params.highlight = 1;
+        raw->highlight_reconstruct = highlight_reconstruct;
+        if (user_mul) {
+            // Same contract as the compatible16 overload: caller-chosen
+            // multipliers replace the as-shot ones and scale_colors()
+            // max-normalises them, which is exactly what
+            // headroom_exposure_restore() expects.
+            for (unsigned c = 0; c < 4; ++c) {
+                if (!std::isfinite((*user_mul)[c]) || (*user_mul)[c] <= 0.0f) {
+                    error = "RAW process: invalid user white-balance multiplier";
+                    return false;
+                }
+                raw->imgdata.params.user_mul[c] = (*user_mul)[c];
+            }
+            raw->imgdata.params.use_camera_wb = 0;
+        }
         DecodedRaw decoded;
         auto start = Clock::now();
         const int open_status = raw->open_file(source.c_str());
@@ -524,6 +655,9 @@ bool decode_raw_headroom(const std::filesystem::path& source,
         decoded.metadata.headroom_enabled = true;
         decoded.metadata.white_balance_exposure_restore = raw->exposure_restore;
         decoded.metadata.camera_to_output = raw->matrix;
+        decoded.metadata.highlight_reconstruct = highlight_reconstruct;
+        decoded.metadata.highlight_reconstruct_applied = raw->reconstruct_result.any_clipped;
+        decoded.metadata.highlight_clipped_pixels = raw->reconstruct_result.clipped_pixels;
         decoded.width = raw->converted_width;
         decoded.height = raw->converted_height;
         decoded.rgb = std::move(raw->converted);

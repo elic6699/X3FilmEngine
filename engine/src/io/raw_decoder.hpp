@@ -54,6 +54,13 @@ struct RawMetadata {
     bool headroom_enabled = false;
     double white_balance_exposure_restore = 1.0;
     std::array<float, 12> camera_to_output{};
+    // Opt-in inpaint-opposed highlight reconstruction (decode.highlight_reconstruct).
+    // Applied to the camera RGB plane before the colour matrix, so the output is
+    // float and may exceed 1.0; the number counts photosites that carried a
+    // clipped channel when statistics were taken.
+    double highlight_reconstruct = 0.0;
+    bool highlight_reconstruct_applied = false;
+    std::uint64_t highlight_clipped_pixels = 0;
 };
 
 struct DecodedRaw {
@@ -63,7 +70,9 @@ struct DecodedRaw {
     // comes from a clipped/quantised uint16 result. Opt-in headroom retains
     // negative RGB from the colour matrix and values above one. Both policies
     // still use LibRaw's integer black subtraction and uint16 demosaicing;
-    // neither recovers clipped sensor samples or below-black sensor values.
+    // neither recovers below-black sensor values. Clipped sensor samples are
+    // only reconstructed when highlight_reconstruct > 0, which switches
+    // compatible16 to an unclamped float exit as well.
     std::vector<float> rgb;
     RawMetadata metadata;
     RawDecodeTimings timings;
@@ -81,8 +90,14 @@ bool decode_raw_compatible(const std::filesystem::path& source,
 // The same policy with caller-chosen white-balance multipliers (R, G, B, G2;
 // LibRaw's user_mul) in place of the as-shot ones. nullptr is the overload
 // above. Used by spektralab-host for Temperature/Tint at decode.
+//
+// highlight_reconstruct > 0 switches the output to the unclamped float path
+// (same scale as compatible16, values may exceed 1.0) and runs inpaint-opposed
+// highlight reconstruction on the camera plane before the colour matrix.
+// 0 keeps the byte-for-byte compatible16 output.
 bool decode_raw_compatible(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
-                           DecodedRaw& out, std::string& error);
+                           DecodedRaw& out, std::string& error,
+                           double highlight_reconstruct = 0.0);
 
 // Monochrome sensor bypass (X3Lumina 2026-11-13): no demosaic, no white
 // balance and no colour matrix. Reads the unpacked single-channel sensor
@@ -102,8 +117,14 @@ bool decode_raw_monochrome(const std::filesystem::path& source,
 // This is not an all-float RAW decoder. AHD can change with scaling, so even
 // non-clipped pixels need not equal the compatibility policy byte for byte.
 // Unsupported sensor/layout/WB cases fail explicitly; compatible16 is never
-// substituted. On failure, out is unchanged.
+// substituted. On failure, out is unchanged. highlight_reconstruct has the same
+// meaning as on the compatible16 overload, with per-channel clip levels derived
+// from the max-normalised white balance. A non-null user_mul replaces the
+// as-shot multipliers exactly as on the compatible16 overload: scale_colors
+// still max-normalises them, so the exposure restoration stays valid.
 bool decode_raw_headroom(const std::filesystem::path& source,
-                         DecodedRaw& out, std::string& error);
+                         DecodedRaw& out, std::string& error,
+                         double highlight_reconstruct = 0.0,
+                         const std::array<float, 4>* user_mul = nullptr);
 
 }  // namespace spk::io
