@@ -8,7 +8,7 @@
 #   SPEKTRALAB_VULKAN_HEADERS   Khronos Vulkan-Headers include dir (default:
 #                               build/deps/Vulkan-Headers/include, else the
 #                               system's / $VULKAN_SDK's)
-#   SPEKTRALAB_LIBRAW_SOURCE    LibRaw 0.22.2 source tree (RAW decode)
+#   SPEKTRALAB_LIBRAW_SOURCE    LibRaw source tree (fork elic6699/LibRaw, 0.22.3 base)
 # The Vulkan loader is never linked: engine/third_party/volk opens it at run
 # time. glslangValidator compiles the kernels to SPIR-V at build time.
 add_library(spektralab_core STATIC

@@ -34,8 +34,8 @@ cp "$repo/license/LICENSE" "$lic/SpektraLab-GPL-3.0.txt"
 cp "$repo/license/SPEKTRAFILM_LICENSE.txt" "$lic/spektrafilm-LICENSE.txt"
 cp "$repo/modern_UI/Spektrafilm/Spektrafilm/Resources/Licenses/Profiles-and-LUTs-CC-BY-SA-4.0.txt" "$lic/"
 cp "$repo/modern_UI/Spektrafilm/Spektrafilm/Resources/Licenses/Profiles-and-LUTs-CHANGELOG.txt" "$lic/"
-cp "$deps/LibRaw-0.22.2/LICENSE.LGPL" "$lic/LibRaw-LGPL-2.1.txt"
-cp "$deps/LibRaw-0.22.2/COPYRIGHT" "$lic/LibRaw-COPYRIGHT.txt"
+cp "$deps/LibRaw-0.22.3/LICENSE.LGPL" "$lic/LibRaw-LGPL-2.1.txt"
+cp "$deps/LibRaw-0.22.3/COPYRIGHT" "$lic/LibRaw-COPYRIGHT.txt"
 cp "$here/third_party/stb/LICENSE" "$lic/stb-LICENSE.txt"
 cp "$here/third_party/volk/LICENSE.md" "$lic/volk-LICENSE.txt"
 cp "$deps/Vulkan-Headers/LICENSE.md" "$lic/Vulkan-Headers-LICENSE.txt"
@@ -46,8 +46,9 @@ The full corresponding source is the SpektraLab repository at the commit
 this build was made from.
 
 Bundled third-party components:
-  LibRaw 0.22.2        LGPL-2.1, statically linked; source: libraw.org, and
-                       engine/setup-libraw.sh fetches the exact pinned tree.
+  LibRaw 0.22.3        LGPL-2.1, statically linked; source: github.com/elic6699/LibRaw
+                       (the product fork of LibRaw), and engine/setup-libraw.sh
+                       fetches the exact pinned tree.
   stb_image, stb_image_write, stb_truetype   public domain / MIT (stb-LICENSE.txt)
   volk                 MIT (volk-LICENSE.txt)
   Vulkan-Headers       Apache-2.0 OR MIT, compile time only

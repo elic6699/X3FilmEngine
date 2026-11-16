@@ -3,7 +3,8 @@
 #
 #   engine/setup-deps.sh [deps-dir]        (default: <repo>/build/deps)
 #
-# - LibRaw 0.22.2 (engine/setup-libraw.sh: zip SHA-256, or git commit + tree id)
+# - LibRaw 0.22.3 (engine/setup-libraw.sh: fork elic6699/LibRaw, archive SHA-256,
+#   or pinned commit + tree id)
 # - Khronos Vulkan-Headers, tag vulkan-sdk-1.4.341.0 (commit + tree id). Headers
 #   only, compile time only; Apache-2.0 OR MIT. The loader itself is not linked:
 #   engine/third_party/volk opens libvulkan.so.1 / vulkan-1.dll at run time.
