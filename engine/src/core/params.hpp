@@ -230,6 +230,16 @@ struct DateImprintParams {
     // on 135, in the margin on 120. Empty = none. `style = data` still prints
     // `text` there alone, as before.
     std::string data_text;
+    // 孔间数据 Perforation Data (SpektraLab 2.4.0, the Pentax MZ-S line): where
+    // `data_text` goes. `gap` = between frames, as before, byte for byte |
+    // `perfs` = one `|`-separated field per gap between the top rebate's
+    // perforations | `perfs_bottom` = the same on the lower rebate, so a date
+    // and a data line can share the two edges of one frame. `placement` also
+    // accepts `perf_top` / `perf_bottom` to print the date in a perf gap.
+    std::string data_placement = "gap";
+    // The roll's leader block (MZ-S, before frame 1), `|`-separated. Reserved
+    // for parity with the Mac engine; not drawn by the Windows Vulkan path.
+    std::string data_leader;
     std::string placement = "frame";
     double exposure_ev = 3.5;        // red-layer exposure above 18 % grey (RFC-031 §3.3)
     // RFC-031 §8 (2026-10-01): three faces of one mechanism. lcd = seven

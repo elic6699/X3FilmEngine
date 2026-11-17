@@ -113,7 +113,18 @@ const uint P_PERF_LEAK_STYLE = 273u;
 const uint P_PERF_LEAK_COVERAGE = 274u;
 const uint P_PERF_LEAK_SOFTNESS = 275u;
 const uint P_PERF_LEAK_SEED = 276u;
-const uint P_COUNT = 277u;
+// API-SPEC §24 (SpektraLab 2.4.1) cine gauges. Windows 分支的 262-276 已被
+// 划痕/灰尘/漏光占用，所以这批追加在 277 之后；静止格式上全部为 0，每个读取
+// 处的算术与今天一致。
+const uint P_PERF_SHAPE = 277u;
+const uint P_PERF_ROWS = 278u;
+const uint P_PERF_RMIN = 279u;
+const uint P_PERF_RMAX = 280u;
+const uint P_PERF_JIT = 281u;
+const uint P_NB_PREV = 282u;
+const uint P_NB_NEXT = 283u;
+const uint P_HOLES = 284u;
+const uint P_COUNT = 285u;
 const uint kQStride = 10u;
 
 vec2 canvas_to_film(float x, float y) {
@@ -218,17 +229,36 @@ float perf_sdf(vec2 st, inout uint hole) {
     const float pitch = P[P_PERF_PITCH], ph = P[P_PERF_PHASE];
     const float k = floor((st.x - ph - 0.5f * P[P_PERF_W]) / pitch + 0.5f);
     const bool top = st.y < 0.5f * W;
+    // API-SPEC §24: one row only -- t-low (Super 8) or t-high (16 mm). At 0 the
+    // still formats fall through and draw both, exactly as before.
+    if ((P[P_PERF_ROWS] > 0.5f && P[P_PERF_ROWS] < 1.5f && !top) ||
+        (P[P_PERF_ROWS] > 1.5f && top)) {
+        hole = 0u;
+        return 1.0e3f;
+    }
     const uint seed = uint(P[P_PERF_SEED]);
+    // the punch's tolerances and the corner clamp: KS's (x 1, 0.3-0.6 mm) at 0.
+    const float jit = P[P_PERF_JIT] > 0.0f ? P[P_PERF_JIT] : 1.0f;
+    const float rmin = P[P_PERF_RMIN] > 0.0f ? P[P_PERF_RMIN] : 0.3f;
+    const float rmax = P[P_PERF_RMAX] > 0.0f ? P[P_PERF_RMAX] : 0.6f;
     hole = hash_u(uint(int(k) * 2 + (top ? 0 : 1)) * 0x9E3779B9u ^ seed);
     const float j0 = hash_f(int(hole & 0xFFFFu), seed ^ 0x1u) - 0.5f, j1 = hash_f(int(hole & 0xFFFFu), seed ^ 0x2u) - 0.5f;
     const float j2 = hash_f(int(hole & 0xFFFFu), seed ^ 0x3u) - 0.5f, j3 = hash_f(int(hole & 0xFFFFu), seed ^ 0x4u) - 0.5f;
     const float j4 = hash_f(int(hole & 0xFFFFu), seed ^ 0x5u) - 0.5f;
-    const float wa = P[P_PERF_W] + 0.016f * j2, hc = P[P_PERF_H] + 0.016f * j3;
-    const float r = clamp(P[P_PERF_R] + 0.08f * j4, 0.3f, 0.6f);
-    const float sc = ph + k * pitch + 0.5f * P[P_PERF_W] + 0.020f * j0;
-    const float tc = (top ? P[P_PERF_EDGE] + 0.5f * P[P_PERF_H] : W - P[P_PERF_EDGE] - 0.5f * P[P_PERF_H]) + 0.024f * j1;
-    const vec2 q = abs(vec2(st.x - sc, st.y - tc)) - vec2(0.5f * wa - r, 0.5f * hc - r);
-    float d = length(max(q, 0.0f)) + min(max(q.x, q.y), 0.0f) - r;
+    const float wa = P[P_PERF_W] + 0.016f * jit * j2, hc = P[P_PERF_H] + 0.016f * jit * j3;
+    const float r = clamp(P[P_PERF_R] + 0.08f * jit * j4, rmin, rmax);
+    const float sc = ph + k * pitch + 0.5f * P[P_PERF_W] + 0.020f * jit * j0;
+    const float tc = (top ? P[P_PERF_EDGE] + 0.5f * P[P_PERF_H] : W - P[P_PERF_EDGE] - 0.5f * P[P_PERF_H]) + 0.024f * jit * j1;
+    float d;
+    if (P[P_PERF_SHAPE] > 0.5f) {
+        // Bell & Howell (§24): a disc the hole's width across, cut flat to its
+        // height, corners eased by r (the shape eroded by r, then grown back).
+        const vec2 pd = vec2(st.x - sc, st.y - tc);
+        d = max(length(pd) - (0.5f * hc - r), abs(pd.x) - (0.5f * wa - r)) - r;
+    } else {
+        const vec2 q = abs(vec2(st.x - sc, st.y - tc)) - vec2(0.5f * wa - r, 0.5f * hc - r);
+        d = length(max(q, 0.0f)) + min(max(q.x, q.y), 0.0f) - r;
+    }
     // the punched edge: each hole's own roughness, 1-4 microns
     const float rough = 0.001f + 0.003f * hash_f(int(hole & 0xFFFFu), seed ^ 0x6u);
     d += rough * (value_noise(st.x / 0.05f, seed ^ 0x77u) + value_noise(st.y / 0.05f, seed ^ 0x99u) - 1.0f) * 2.0f;

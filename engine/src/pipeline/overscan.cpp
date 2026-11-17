@@ -354,7 +354,17 @@ enum OsP : int {
     P_PERF_LEAK_COVERAGE = 274,
     P_PERF_LEAK_SOFTNESS = 275,
     P_PERF_LEAK_SEED = 276,
-    P_COUNT = 277
+    // API-SPEC §24 (SpektraLab 2.4.1) cine gauges. Windows 分支的 262-276 已被
+    // 划痕/灰尘/漏光占用，所以这一批追加在 277 之后（Mac 用的 262-269 在这里
+    // 会直接撞车）。静止格式上全部为 0，每个读取处保持今天的算术 —— 逐字节
+    // 零回归。
+    P_PERF_SHAPE = 277,    // 0 KS 圆角矩形; 1 Bell & Howell
+    P_PERF_ROWS,           // 0 两缘; 1 只 t-low (Super 8); 2 只 t-high (16 mm)
+    P_PERF_RMIN, P_PERF_RMAX,   // 孔角半径的 clamp 上下限 (0: 0.3 / 0.6 mm, KS)
+    P_PERF_JIT,            // 冲切公差缩放 (0: x 1)
+    P_NB_PREV, P_NB_NEXT,  // > 0: 前/后一格是同一画面，相沿这个距离
+    P_HOLES,               // 1: 片基有齿孔（135 布局或 cine 规挌）
+    P_COUNT = 285
 };
 constexpr int kMaxLeaks = 12;
 // How far past each long edge of the film a strip scan reaches, mm.
@@ -418,11 +428,48 @@ constexpr Format kFormats[] = {
     {"135_full_67", 35.0, 35.0, 69.5, true, "square"}, // 135 through a 6×7-width aperture: the whole strip is exposed
     {"120_6x12", 61.0, 56.0, 112.0, false, "square"},
     {"120_6x17", 61.0, 56.0, 168.0, false, "square"},
+    // API-SPEC §24 (SpektraLab 2.4.1): 电影规挌。`perforated` 保持 false，135 那套
+    // 齿孔栅格不参与；孔由下面的 kCine 给出。
+    {"8_super",   7.976, 5.79,  4.01,  false, "rounded"},   // SMPTE 149 Super 8
+    {"16_super", 15.95, 12.35, 7.50,  false, "square"},     // SMPTE 109/201M Super 16
+    {"35_4perf", 35.0,  24.89, 18.67, false, "square"},     // BH-1866，全画幅相机片门
+    {"65_5perf", 64.97, 52.63, 23.01, false, "square"},     // SMPTE 145，65 mm 5 孔
+    {"65_15perf",64.97, 52.63, 70.41, false, "square"},     // 65 mm 15 孔 (70 mm)
 };
-constexpr const char* kFormatNames = "135, 135_half, 120_645, 120_6x6, 120_6x7, 120_6x8, 120_6x9, 135_xpan, 135_full_67, 120_6x12, 120_6x17";
+constexpr const char* kFormatNames = "135, 135_half, 120_645, 120_6x6, 120_6x7, 120_6x8, 120_6x9, 135_xpan, 135_full_67, 120_6x12, 120_6x17, 8_super, 16_super, 35_4perf, 65_5perf, 65_15perf";
 constexpr const char* kGateFamilies[] = {"square", "rounded", "eared", "shouldered", "kicked"};
 const Format* find_format(const std::string& name) {
     for (const Format& f : kFormats) if (name == f.name) return &f;
+    return nullptr;
+}
+
+// API-SPEC §24 (SpektraLab 2.4.1): 电影规挌的片基。依据 SMPTE 149 (Super 8)、
+// BH-1866 (35 mm)、SMPTE 145 (65 mm KS 孔) 与 SMPTE 109/201M (16 mm)。每个数
+// 都是这里的常量，改一个判断只改一处。
+struct Cine {
+    const char* name;
+    double pitch, hole_along, hole_across, hole_edge, hole_r;
+    int shape;              // 0: KS 圆角矩形; 1: Bell & Howell
+    int rows;               // 0: 两缘; 1: 只 t-low; 2: 只 t-high
+    int perfs;              // 一格的孔数，即画幅的推进
+    int aspect_long, aspect_short;
+    double guided;          // > 0: 片门离有孔那一缘这么远；0: 居中
+    double mech;            // 这个规挌相机自身的尺寸 (E)
+    double t_tol, reg, adv_err;
+    double r_min, r_max, jit;
+    bool single_frame;      // 只有一格，没有邻格画面
+    bool at_line;           // 孔对准画幅线，不是画幅中心
+};
+constexpr Cine kCine[] = {
+    {"8_super",   4.234, 1.143, 0.914, 0.51,  0.13, 0, 1, 1, 3, 2, 1.47, 0.25, 0.025, 0.08, 0.02, 0.08, 0.18, 0.5, false, false},
+    {"16_super",  7.605, 1.270, 1.829, 0.902, 0.25, 0, 2, 1, 16, 9, 2.825, 0.35, 0.04, 0.04, 0.015, 0.18, 0.32, 0.75, false, true},
+    {"35_4perf",  4.740, 1.854, 2.794, 2.01,  0.127,1, 0, 4, 3, 2, 0.0,  0.5,  0.05, 0.03, 0.01, 0.05, 0.20, 1.0, true,  false},
+    {"65_5perf",  4.75,  1.981, 2.794, 2.97,  0.51, 0, 0, 5, 20, 9, 0.0,  0.5,  0.05, 0.03, 0.01, 0.3,  0.6,  1.0, true,  false},
+    {"65_15perf", 4.75,  1.981, 2.794, 2.97,  0.51, 0, 0, 15, 4, 3, 0.0,  0.5,  0.05, 0.03, 0.01, 0.3,  0.6,  1.0, true,  false},
+};
+const Cine* find_cine(const Format* f) {
+    if (!f) return nullptr;
+    for (const Cine& c : kCine) if (std::strcmp(f->name, c.name) == 0) return &c;
     return nullptr;
 }
 
@@ -1015,12 +1062,23 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
     Rng rc(stream(cam, kCamera, 1)), rf(stream(frm ^ (cam << 32), kFrame, 1));
 
     // --- film and gate ---------------------------------------------------
+    // API-SPEC §24 (SpektraLab 2.4.1): 在所有静止格式上是 nullptr，所以下面每个
+    // cine 分支对既有布局都是死代码。
+    const Cine* cine = find_cine(fmt);
+    const double cine_small = cine ? std::min(1.0, 2.0 * cine->mech) : 1.0;
     L.film_w = fmt->film_w + (fmt->perforated ? 0.0 : rc.uni(-0.15, 0.15));
     // Camera centring + weave. A 120 gate sits up to ~0.5 mm off the film's
     // middle (reference_film/120: rebates of 2.26/3.28, 2.48/2.60, 2.51/2.99,
     // 2.4/3.1 and 1.9/2.64 mm); a 135 gate is held by the perforations.
-    const double t_off = (fmt->perforated ? rc.uni(-0.10, 0.10) : rc.uni(-0.45, 0.45)) + rf.normal() * 0.025;
-    L.gate_t0 = 0.5 * (L.film_w - L.gate_across) + (L.format == "135_full_67" ? 0.0 : t_off);
+    const double t_off = cine ? (rc.uni(-cine->t_tol, cine->t_tol) + rf.normal() * 0.025 * cine_small)
+                              : ((fmt->perforated ? rc.uni(-0.10, 0.10) : rc.uni(-0.45, 0.45)) + rf.normal() * 0.025);
+    // A cine film is guided by its perforated edge: Super 8 (single row, t-low)
+    // puts the picture toward the far edge, 16 mm (t-high) the other; the
+    // double-perf gauges stay centred. Still formats keep the old mid-point.
+    const double gate_mid = cine ? (cine->guided <= 0.0 ? 0.5 * (L.film_w - L.gate_across)
+                                   : cine->rows == 2 ? L.film_w - cine->guided - L.gate_across : cine->guided)
+                                 : 0.5 * (L.film_w - L.gate_across);
+    L.gate_t0 = gate_mid + (L.format == "135_full_67" ? 0.0 : t_off);
     L.gate_s0 = 0.0;
     for (int side = 0; side < 4; ++side)
         for (int k = 0; k < 3; ++k) {
@@ -1031,7 +1089,7 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
         for (auto& side : L.wob_a) for (double& amplitude : side) amplitude = 0.0;
     // The gate sits a fraction of a millimetre in front of the emulsion; its
     // shadow's radius is gap / (2 N). EXIF gives N; f/5.6 when unknown.
-    const double gate_gap = rc.uni(0.18, 0.40);
+    const double gate_gap = rc.uni(0.18, 0.40) * cine_small;
     const double N = o.f_number > 0.5 ? o.f_number : 5.6;
     L.penumbra = gate_gap / (2.0 * N);
 
@@ -1051,6 +1109,14 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
         }
         if (L.format != "135_full_67") gate_shape(L, family, fmt->perforated, rg);
     }
+    // API-SPEC §24: a cine camera's own mechanics -- tighter gate radii and
+    // roughness at the smaller gauges; mech >= 0.5 keeps its imprint quads.
+    if (cine) {
+        for (double& r : L.gate_r) r *= cine->mech;
+        L.rough_amp *= cine->mech;
+        if (cine->mech < 0.5) L.quads.clear();
+        for (auto& side : L.wob_a) for (double& a : side) a *= cine->mech;
+    }
     L.holes_light = o.holes == "white";
     L.carrier_open = o.carrier == "open";
     L.carrier_none = o.carrier == "none";
@@ -1066,6 +1132,33 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
         // (perf_phase -3.2) and the name starts 6 mm in. Drawn within +-0.7 mm
         // of that, not across the whole pitch; the advance error stays the frame's.
         L.perf_phase = std::clamp(-3.3 + rc.uni(-0.7, 0.7) + rf.normal() * 0.08, -4.1, -2.6);
+    }
+
+    // API-SPEC §24 (SpektraLab 2.4.1): a cine gauge's own perforations,
+    // sprocket-locked: the camera's pins hold the frame on them, so the frame
+    // line falls midway between two holes (an even count a frame), the hole is
+    // centred on the frame (Super 8) or on the frame line (16 mm, `at_line`).
+    // The neighbours are the same picture one advance before and after.
+    // Streams of their own, after every draw above: nothing else moves.
+    if (cine) {
+        L.cine = true;
+        L.holes = true;
+        L.perforated = false;             // 135 那套栅格不参与
+        L.perf_pitch = cine->pitch; L.perf_w = cine->hole_along; L.perf_h = cine->hole_across;
+        L.perf_edge = cine->hole_edge; L.perf_r = cine->hole_r;
+        L.perf_shape = cine->shape; L.perf_rows = cine->rows;
+        L.perf_rmin = cine->r_min; L.perf_rmax = cine->r_max; L.perf_jit = cine->jit;
+        Rng rk(stream(cam, kCamera, 29)), rn(stream(frm ^ (cam << 32), kFrame, 30));
+        const double reg = rk.uni(-cine->reg, cine->reg), jitter = rn.normal() * cine->adv_err;
+        const double centre = L.gate_s0 + 0.5 * L.gate_along;
+        const bool line = cine->at_line || cine->perfs % 2 == 0;
+        L.perf_phase = centre - 0.5 * cine->hole_along + (line ? 0.5 * cine->pitch : 0.0) + reg + jitter;
+        const double adv = cine->perfs * cine->pitch;
+        L.nb_prev = adv + rn.normal() * cine->adv_err;
+        L.nb_next = adv + rn.normal() * cine->adv_err;
+        if (cine->single_frame) { L.nb_prev = 0.0; L.nb_next = 0.0; }
+    } else {
+        L.holes = L.perforated;
     }
 
     // --- canvas ------------------------------------------------------------
@@ -1090,6 +1183,16 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
         t_lo = L.format == "135_full_67" ? 0.0 : L.gate_t0 - 1.1;
         t_hi = L.format == "135_full_67" ? L.film_w : L.gate_t0 + L.gate_across + 1.1;
     }
+    if (cine) {
+        // API-SPEC §24: the frame and a sliver of each neighbour, at the gauge's
+        // named aspect (Super 8 3:2, 16 mm 16:9); a single-frame gauge shows one
+        // frame's advance, the frame line split between its two ends.
+        const bool long_across = fmt->across > fmt->along;
+        const double canvas_along = cine->single_frame ? cine->perfs * cine->pitch
+                                  : long_across ? L.film_w * cine->aspect_short / cine->aspect_long
+                                                : L.film_w * cine->aspect_long / cine->aspect_short;
+        margin_along = std::max(0.0, 0.5 * (canvas_along - L.gate_along));
+    }
     if (L.format == "135_full_67") margin_along = 0.0;
     const uint32_t m_px = uint32_t(std::lround(margin_along / L.px));
     const uint32_t along_px = uint32_t(L.vertical ? frame_h : frame_w) + 2 * m_px;
@@ -1112,7 +1215,7 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
     const bool full_width = L.format == "135_full_67";
     if (full_width) L.scan_rot = 0.0;
     const double random_ds = rf.normal() * 0.08, random_dt = rf.normal() * 0.06;
-    const double ds = full_width ? 0.0 : random_ds, dt = full_width ? 0.0 : random_dt;
+    const double ds = full_width ? 0.0 : random_ds * cine_small, dt = full_width ? 0.0 : random_dt * cine_small;
     const double cu = 0.5 * L.canvas_w * L.px, cv = 0.5 * L.canvas_h * L.px;
     const double c = std::cos(L.scan_rot), sn = std::sin(L.scan_rot);
     // canvas (u, v) -> film (s, t): the scan rotation R, then for a vertical film
@@ -1308,7 +1411,7 @@ void Pipeline::overscan_params_block(std::vector<float>& P) const {
         P[b] = float(L.leaks[k].s); P[b + 1] = float(L.leaks[k].side); P[b + 2] = float(L.leaks[k].amp);
         P[b + 3] = float(L.leaks[k].sig_s); P[b + 4] = float(L.leaks[k].sig_t);
     }
-    P[P_PERFORATED] = L.perforated ? 1.0f : 0.0f;
+    P[P_PERFORATED] = L.holes ? 1.0f : 0.0f;   // 齿孔：135 布局的或 cine 规挌的 (API-SPEC §24)
     P[P_PERF_PITCH] = float(L.perf_pitch); P[P_PERF_W] = float(L.perf_w); P[P_PERF_H] = float(L.perf_h);
     P[P_PERF_EDGE] = float(L.perf_edge); P[P_PERF_R] = float(L.perf_r); P[P_PERF_PHASE] = float(L.perf_phase);
     for (int c = 0; c < 3; ++c) P[P_HOLE_C + c] = float(L.hole_cmy[c]);
@@ -1332,6 +1435,11 @@ void Pipeline::overscan_params_block(std::vector<float>& P) const {
     P[P_WALL_PAR] = float(L.wall_parallax);
     for (int c = 0; c < 3; ++c) P[P_BASE_R + c] = float(L.base_rgb[c]);
     P[P_WALL_GLOW] = float(L.wall_glow); P[P_WALL_SCATTER] = float(L.wall_scatter);
+    // API-SPEC §24: cine 规挌。静止格式上全部为 0。
+    P[P_PERF_SHAPE] = float(L.perf_shape); P[P_PERF_ROWS] = float(L.perf_rows);
+    P[P_PERF_RMIN] = float(L.perf_rmin); P[P_PERF_RMAX] = float(L.perf_rmax); P[P_PERF_JIT] = float(L.perf_jit);
+    P[P_NB_PREV] = float(L.nb_prev); P[P_NB_NEXT] = float(L.nb_next);
+    P[P_HOLES] = L.holes ? 1.0f : 0.0f;
 }
 
 // ---------------------------------------------------------------------------
@@ -1680,6 +1788,93 @@ double dot_matrix(const std::string& text, double h, Emit emit, double field_gap
         x += 6.0 * pitch;
     }
     return std::max(0.0, x - pitch);
+}
+
+// --- 孔间数据 / the Pentax MZ-S data line (SpektraLab 2.4.0) ---------------
+// One field per gap between perforations. The face is the 5x7 matrix made
+// bold (every stroke a column wider), its zero unslashed, in round dots that
+// overlap along a row and down a column ("beaded"), on a narrow cell: 0.82
+// mm tall at size 1, with the columns 0.6 of the rows' pitch. Its own glyphs
+// beside the 5x7 set (not added to it, so no other line changes): `±`, `"`
+// and the three metering marks, which the host writes as tokens.
+enum : char { kMzMulti = 1, kMzCenter = 2, kMzSpot = 3, kMzPlusMinus = 4, kMzSeconds = 5 };
+constexpr double kMzColumn = 0.6;
+
+static std::string mzs_tokens(std::string s) {
+    const struct { const char* from; char to; } k[] = {
+        {"{meter:multi}", kMzMulti}, {"{meter:center}", kMzCenter}, {"{meter:spot}", kMzSpot},
+        {"\xC2\xB1", kMzPlusMinus}, {"\"", kMzSeconds},
+    };
+    for (const auto& r : k)
+        for (size_t p = s.find(r.from); p != std::string::npos; p = s.find(r.from, p + 1))
+            s.replace(p, std::strlen(r.from), 1, r.to);
+    return s;
+}
+
+// A glyph's rows (7, top first; '#' lit), its columns in `ncol`; null for a space.
+static const char* const* mzs_glyph(char ch, int& ncol) {
+    static const char* const kMulti[7] = {"####...#...####", "##....###....##", "##...#####...##", "##..#######..##",
+                                          "##...#####...##", "##....###....##", "####...#...####"};
+    static const char* const kCenter[7] = {"####.......####", "##....###....##", "##...#...#...##", "##..#.....#..##",
+                                           "##...#...#...##", "##....###....##", "####.......####"};
+    static const char* const kSpot[7] = {"####.......####", "##...........##", "##.....#.....##", "##....###....##",
+                                         "##.....#.....##", "##...........##", "####.......####"};
+    static const char* const kPm[7] = {"..##..", "..##..", "######", "..##..", "..##..", "......", "######"};
+    static const char* const kSec[7] = {"##.##.", "##.##.", "##.##.", "......", "......", "......", "......"};
+    switch (ch) {
+        case kMzMulti: ncol = 15; return kMulti;
+        case kMzCenter: ncol = 15; return kCenter;
+        case kMzSpot: ncol = 15; return kSpot;
+        case kMzPlusMinus: ncol = 6; return kPm;
+        case kMzSeconds: ncol = 6; return kSec;
+        default: break;
+    }
+    static const uint8_t kZero[7] = {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E};
+    static char buf[7][7];
+    static const char* rows[7];
+    const uint8_t* g = ch == '0' ? kZero : glyph5x7(ch);
+    if (!g) return nullptr;
+    for (int r = 0; r < 7; ++r) {
+        const unsigned bits = (unsigned(g[r]) << 1) | g[r];          // bold: six columns
+        for (int c = 0; c < 6; ++c) buf[r][c] = (bits & (0x20u >> c)) ? '#' : '.';
+        buf[r][6] = 0;
+        rows[r] = buf[r];
+    }
+    ncol = 6;
+    return rows;
+}
+
+// Lays a field out with its ink centred on `s_c` and its foot on `foot_t`
+// (glyphs toward smaller t), each dot a disc. Returns the ink's length;
+// measures only with `out` null.
+static double mzs_field(const std::string& text, double h, double s_c, double foot_t, std::vector<Op>* out) {
+    const double p = h / 7.2, cp = kMzColumn * p, r = 0.6 * p;
+    double lo = 1e30, hi = -1e30, x = 0.0;
+    std::vector<std::pair<double, double>> dots;
+    for (char ch : text) {
+        int ncol = 0;
+        const char* const* g = ch == ' ' ? nullptr : mzs_glyph(ch, ncol);
+        if (!g) { x += 4.0 * cp; continue; }
+        for (int row = 0; row < 7; ++row)
+            for (int c = 0; c < ncol; ++c)
+                if (g[row][c] == '#') {
+                    dots.push_back({x + c * cp, (6 - row) * p});
+                    lo = std::min(lo, x + c * cp);
+                    hi = std::max(hi, x + c * cp);
+                }
+        x += (ncol + 1) * cp;
+    }
+    if (dots.empty()) return 0.0;
+    const double len = hi - lo + 2.0 * r;
+    if (out)
+        for (const auto& d : dots) {
+            Op op;
+            op.kind = Op::Circle;
+            op.pts = {s_c - 0.5 * len + r + (d.first - lo), foot_t - r - d.second};
+            op.size_mm = r;                 // Windows Op::Circle: size_mm is the disc radius
+            out->push_back(op);
+        }
+    return len;
 }
 
 // The DX film-edge bar code (ISO 1007, frame-number version): 31 modules in
@@ -2670,6 +2865,12 @@ void imprint_groups(const OverscanLayout& L, const Params& params, double frame_
     const bool data_style = d.style == "data";
     const std::string date_text = data_style ? std::string() : d.text;
     const std::string data_text = data_style ? d.text : d.data_text;
+    // 孔间数据 (SpektraLab 2.4.0, the Pentax MZ-S line): `data_placement` puts
+    // the data line one field per gap between the perforations instead of in
+    // the gap between frames. `perfs` = the top rebate, `perfs_bottom` = the
+    // lower one, so a date on one edge and the data on the other both fit.
+    const bool perfs_bottom = d.data_placement == "perfs_bottom";
+    const bool perfs = (d.data_placement == "perfs" || perfs_bottom) && !data_text.empty();
     if (date_text.empty() && data_text.empty()) return;
     const std::string fmt = L.valid ? L.format : (o.format == "135_half" ? std::string("135_half") : std::string("135"));
     const bool is135 = fmt == "135" || fmt == "135_half";
@@ -2795,7 +2996,7 @@ void imprint_groups(const OverscanLayout& L, const Params& params, double frame_
         if (!L.valid) return;
         const double h = 0.55 * k;
         const double t_base = gt + gh + 0.30 + h;
-        if (!data_text.empty()) {
+        if (!data_text.empty() && !perfs) {   // 孔间数据是 135 的（120 无齿孔）
             const double s0 = gs + 0.08 * gw;
             draw(data_text, "data", h, [&](double x, double y, double& ss, double& tt) { ss = s0 + x; tt = t_base - y; });
         }
@@ -2816,9 +3017,41 @@ void imprint_groups(const OverscanLayout& L, const Params& params, double frame_
         const double t_c = gt + 0.5 * gh + 0.5 * w;
         draw(text, style, h, [&](double x, double y, double& ss, double& tt) { ss = s_c + (underlined(text, style) ? 0.39 : 0.5) * h - y; tt = t_c - x; });
     };
-    const bool data_drawn = !data_text.empty() && L.valid;
+    const bool data_drawn = !data_text.empty() && L.valid && !perfs;
     if (data_drawn) between(data_text, "data", 0.50 * k, false);
-    if (!date_text.empty() && d.placement == "rebate" && L.valid) {
+    // 孔间 (perforation data): one field per gap between the holes, on the
+    // camera's top rebate or, with `perfs_bottom`, the lower one. Fields are
+    // `|`-separated; a field longer than the 2.77 mm gap loses words, then
+    // characters, from its end. Centred in each gap, the foot 0.76 mm off the
+    // gate; 0.82 mm tall at size 1 -- the strip's own MZ-S line.
+    auto perf_fields = [&](const std::string& text, char sep, bool bottom, double h) {
+        if (!L.holes || L.perf_pitch <= 0.0) return;
+        const double pitch = L.perf_pitch, gap_w = pitch - L.perf_w, ph = L.perf_phase;
+        const int i0 = int(std::ceil((gs - ph) / pitch - 1e-9));
+        const double foot = bottom ? (gt + gh + 0.76 + h) : (gt - 0.76);
+        std::vector<std::string> fields;
+        size_t a = 0;
+        for (size_t b = text.find(sep); ; b = text.find(sep, a)) {
+            fields.push_back(text.substr(a, b == std::string::npos ? std::string::npos : b - a));
+            if (b == std::string::npos) break;
+            a = b + 1;
+        }
+        for (size_t j = 0; j < fields.size(); ++j) {
+            std::string tx = mzs_tokens(fields[j]);
+            while (!tx.empty() && mzs_field(tx, h, 0.0, 0.0, nullptr) > gap_w) {
+                const size_t cut = tx.rfind(' ');
+                tx = (cut != std::string::npos && cut > 0) ? tx.substr(0, cut) : tx.substr(0, tx.size() - 1);
+            }
+            if (tx.empty()) continue;
+            const double s_c = ph + double(i0 + int(j)) * pitch + 0.5 * (pitch + L.perf_w);
+            mzs_field(tx, h, s_c, foot, &g.ops);
+        }
+    };
+    if (perfs && L.valid) perf_fields(data_text, '|', perfs_bottom, 0.82 * k);
+    if (!date_text.empty() && (d.placement == "perf_top" || d.placement == "perf_bottom") && L.valid) {
+        // 日期印在另一条齿孔带的空隙里（一个词一项），与数据分居上下两缘。
+        perf_fields(date_text, ' ', d.placement == "perf_bottom", 0.82 * k);
+    } else if (!date_text.empty() && d.placement == "rebate" && L.valid) {
         between(date_text, d.style, 0.55 * k, data_drawn);
     } else if (!date_text.empty()) {
         // In the frame, at the chosen corner of the *film's* frame (the corner
@@ -2908,9 +3141,9 @@ std::string Pipeline::overscan_geometry_json() const {
      * keep the shell's simple JSON reader happy. Render output is unchanged;
      * this only extends the geometry reply. */
     std::snprintf(buf, sizeof buf, ",\"film_w\":%.9g,\"perforated\":%s",
-                  L.film_w, (L.perforated && L.perf_pitch > 0) ? "true" : "false");
+                  L.film_w, (L.holes && L.perf_pitch > 0) ? "true" : "false");
     s += buf;
-    if (L.perforated && L.perf_pitch > 0) {
+    if (L.holes && L.perf_pitch > 0) {
         std::snprintf(buf, sizeof buf,
             ",\"perf_pitch\":%.9g,\"perf_phase\":%.9g,\"perf_edge\":%.9g"
             ",\"perf_w\":%.9g,\"perf_h\":%.9g,\"perf_r\":%.9g",
@@ -2978,8 +3211,13 @@ bool Pipeline::node_overscan(const Image& in, Image& out, std::string& error) {
             error = "date_imprint: unknown corner '" + di.corner + "' (br, bl, tr, tl)";
             return false;
         }
-        if (di.placement != "frame" && di.placement != "rebate") {
-            error = "date_imprint: unknown placement '" + di.placement + "' (frame, rebate)";
+        if (di.placement != "frame" && di.placement != "rebate" &&
+            di.placement != "perf_top" && di.placement != "perf_bottom") {
+            error = "date_imprint: unknown placement '" + di.placement + "' (frame, rebate, perf_top, perf_bottom)";
+            return false;
+        }
+        if (di.data_placement != "gap" && di.data_placement != "perfs" && di.data_placement != "perfs_bottom") {
+            error = "date_imprint: unknown data_placement '" + di.data_placement + "' (gap, perfs, perfs_bottom)";
             return false;
         }
     }

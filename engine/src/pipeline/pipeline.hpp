@@ -271,6 +271,16 @@ struct OverscanLayout {
     double scan_rot = 0;
     bool perforated = false;
     double perf_pitch = 0, perf_w = 0, perf_h = 0, perf_edge = 0, perf_r = 0, perf_phase = 0;
+    // API-SPEC §24 (SpektraLab 2.4.1) 电影规挌：Super 8、16 mm、35 mm 4 孔、
+    // 65 mm 5/15 孔。在任何静止格式上都是 0 / false，既有布局逐字节不变。
+    // `holes` 把「135 那套布局」和「片基到底有没有齿孔」分开 —— 内核读 `holes`。
+    // `cine` 标记前者：孔与邻格都遵循它自己的 SMPTE 表；`perf_shape` 0 = KS、
+    // 1 = Bell & Howell；`perf_rows` 0 = 两缘、1 = 只 t-low、2 = 只 t-high。
+    bool holes = false;
+    bool cine = false;
+    int perf_shape = 0, perf_rows = 0;
+    double perf_rmin = 0, perf_rmax = 0, perf_jit = 0;
+    double nb_prev = 0, nb_next = 0;      // 邻格：同一画面，相沿这么远 (0 = 无)
     double fog_amp = 0, fog_width = 0.5, fog_period = 8.0;
     uint32_t fog_seed = 0;
     struct Leak { double s = 0; int side = 0; double amp = 0, sig_s = 1, sig_t = 1; };
