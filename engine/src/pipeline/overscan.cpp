@@ -60,7 +60,16 @@ enum OsP : int {
     // FrameMatter (GPL-3.0-or-later, Copyright 2026 LittleSixNine): 135 全宽曝光。
     // 内部曝光布局标志，不是新的公开参数；只有 135_full_67 为 1。
     P_FULL_WIDTH = 261,
-    P_COUNT = 262
+    // API-SPEC §24 (SpektraLab 2.4.1) cine gauges. Appended after every slot
+    // above so nothing moves; each is 0 on every still format and every reader
+    // keeps today's arithmetic at 0 (bit-for-bit zero regression).
+    P_PERF_SHAPE = 262,    // 0 KS rounded rect; 1 Bell & Howell
+    P_PERF_ROWS,           // 0 both edges; 1 t-low only (Super 8); 2 t-high only (16 mm)
+    P_PERF_RMIN, P_PERF_RMAX,   // the hole's corner-radius clamp (0: 0.3 / 0.6 mm, KS)
+    P_PERF_JIT,            // punch tolerances' scale (0: x 1)
+    P_NB_PREV, P_NB_NEXT,  // > 0: the frame before / after, this far along (same picture)
+    P_HOLES,               // 1: the film has perforations (135 layout OR a cine gauge)
+    P_COUNT = 270
 };
 constexpr int kMaxLeaks = 12;
 // How far past each long edge of the film a strip scan reaches, mm.
@@ -126,11 +135,48 @@ constexpr Format kFormats[] = {
     {"135_full_67", 35.0, 35.0, 69.5, true, "square"},
     {"120_6x12", 61.0, 56.0, 112.0, false, "square"},
     {"120_6x17", 61.0, 56.0, 168.0, false, "square"},
+    // API-SPEC §24 (SpektraLab 2.4.1): cine gauges. `perforated` stays false
+    // so the 135-style perf grid is not used; the holes come from kCine below.
+    {"8_super",   7.976, 5.79,  4.01,  false, "rounded"},   // SMPTE 149 Super 8
+    {"16_super", 15.95, 12.35, 7.50,  false, "square"},     // SMPTE 109/201M Super 16
+    {"35_4perf", 35.0,  24.89, 18.67, false, "square"},     // BH-1866, full camera aperture
+    {"65_5perf", 64.97, 52.63, 23.01, false, "square"},     // SMPTE 145, 65 mm 5-perf
+    {"65_15perf",64.97, 52.63, 70.41, false, "square"},     // 65 mm 15-perf (70 mm)
 };
-constexpr const char* kFormatNames = "135, 135_half, 120_645, 120_6x6, 120_6x7, 120_6x8, 120_6x9, 135_xpan, 135_full_67, 120_6x12, 120_6x17";
+constexpr const char* kFormatNames = "135, 135_half, 120_645, 120_6x6, 120_6x7, 120_6x8, 120_6x9, 135_xpan, 135_full_67, 120_6x12, 120_6x17, 8_super, 16_super, 35_4perf, 65_5perf, 65_15perf";
 constexpr const char* kGateFamilies[] = {"square", "rounded", "eared", "shouldered", "kicked"};
 const Format* find_format(const std::string& name) {
     for (const Format& f : kFormats) if (name == f.name) return &f;
+    return nullptr;
+}
+
+// API-SPEC §24 (SpektraLab 2.4.1): the cine gauges' film. Sources: SMPTE 149
+// (Super 8), BH-1866 (35 mm), SMPTE 145 (65 mm KS holes) and SMPTE 109/201M
+// (16 mm). Every number is a constant here, so a decision is one entry.
+struct Cine {
+    const char* name;
+    double pitch, hole_along, hole_across, hole_edge, hole_r;
+    int shape;              // 0: KS rounded rectangle; 1: Bell & Howell
+    int rows;               // 0: both edges; 1: t-low only; 2: t-high only
+    int perfs;              // perforations a frame: the advance
+    int aspect_long, aspect_short;
+    double guided;          // > 0: gate this far from the perforated edge; 0: centred
+    double mech;            // camera's own sizes at this gauge (E)
+    double t_tol, reg, adv_err;
+    double r_min, r_max, jit;
+    bool single_frame;      // one frame only, no neighbour's picture
+    bool at_line;           // the hole centred on the frame line, not the frame
+};
+constexpr Cine kCine[] = {
+    {"8_super",   4.234, 1.143, 0.914, 0.51,  0.13, 0, 1, 1, 3, 2, 1.47, 0.25, 0.025, 0.08, 0.02, 0.08, 0.18, 0.5, false, false},
+    {"16_super",  7.605, 1.270, 1.829, 0.902, 0.25, 0, 2, 1, 16, 9, 2.825, 0.35, 0.04, 0.04, 0.015, 0.18, 0.32, 0.75, false, true},
+    {"35_4perf",  4.740, 1.854, 2.794, 2.01,  0.127,1, 0, 4, 3, 2, 0.0,  0.5,  0.05, 0.03, 0.01, 0.05, 0.20, 1.0, true,  false},
+    {"65_5perf",  4.75,  1.981, 2.794, 2.97,  0.51, 0, 0, 5, 20, 9, 0.0,  0.5,  0.05, 0.03, 0.01, 0.3,  0.6,  1.0, true,  false},
+    {"65_15perf", 4.75,  1.981, 2.794, 2.97,  0.51, 0, 0, 15, 4, 3, 0.0,  0.5,  0.05, 0.03, 0.01, 0.3,  0.6,  1.0, true,  false},
+};
+const Cine* find_cine(const Format* f) {
+    if (!f) return nullptr;
+    for (const Cine& c : kCine) if (std::strcmp(f->name, c.name) == 0) return &c;
     return nullptr;
 }
 
@@ -573,15 +619,26 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
     Rng rc(stream(cam, kCamera, 1)), rf(stream(frm ^ (cam << 32), kFrame, 1));
 
     // --- film and gate ---------------------------------------------------
+    // API-SPEC §24 (SpektraLab 2.4.1): null on every still format, so every
+    // cine branch below is dead code for the layouts this engine already had.
+    const Cine* cine = find_cine(fmt);
+    const double cine_small = cine ? std::min(1.0, 2.0 * cine->mech) : 1.0;
     L.film_w = fmt->film_w + (fmt->perforated ? 0.0 : rc.uni(-0.15, 0.15));
     // Camera centring + weave. A 120 gate sits up to ~0.5 mm off the film's
     // middle (reference_film/120: rebates of 2.26/3.28, 2.48/2.60, 2.51/2.99,
     // 2.4/3.1 and 1.9/2.64 mm); a 135 gate is held by the perforations.
     const bool full_width = L.format == "135_full_67";
-    const double t_off = (fmt->perforated ? rc.uni(-0.10, 0.10) : rc.uni(-0.45, 0.45)) + rf.normal() * 0.025;
+    const double t_off = cine ? (rc.uni(-cine->t_tol, cine->t_tol) + rf.normal() * 0.025 * cine_small)
+                              : ((fmt->perforated ? rc.uni(-0.10, 0.10) : rc.uni(-0.45, 0.45)) + rf.normal() * 0.025);
+    // A cine film is guided by its perforated edge: Super 8 (single row, t-low)
+    // puts the picture toward the far edge, 16 mm (t-high) the other; the
+    // double-perf gauges stay centred. Still formats keep the old mid-point.
+    const double gate_mid = cine ? (cine->guided <= 0.0 ? 0.5 * (L.film_w - L.gate_across)
+                                   : cine->rows == 2 ? L.film_w - cine->guided - L.gate_across : cine->guided)
+                                 : 0.5 * (L.film_w - L.gate_across);
     // 全宽：片门横跨整条片基，居中且不再抽相机偏心；上下摆动也清零，
     // 否则画面边缘会露出一角未曝光的楔形。
-    L.gate_t0 = 0.5 * (L.film_w - L.gate_across) + (full_width ? 0.0 : t_off);
+    L.gate_t0 = gate_mid + (full_width ? 0.0 : t_off);
     L.gate_s0 = 0.0;
     for (int side = 0; side < 4; ++side)
         for (int k = 0; k < 3; ++k) {
@@ -592,7 +649,7 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
         for (auto& side : L.wob_a) for (double& amplitude : side) amplitude = 0.0;
     // The gate sits a fraction of a millimetre in front of the emulsion; its
     // shadow's radius is gap / (2 N). EXIF gives N; f/5.6 when unknown.
-    const double gate_gap = rc.uni(0.18, 0.40);
+    const double gate_gap = rc.uni(0.18, 0.40) * cine_small;
     const double N = o.f_number > 0.5 ? o.f_number : 5.6;
     L.penumbra = gate_gap / (2.0 * N);
 
@@ -613,6 +670,14 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
         // 全宽曝光没有相机片门：片门形状控件在这一档不参与（片基整幅开放）。
         if (!full_width) gate_shape(L, family, fmt->perforated, rg);
     }
+    // API-SPEC §24: a cine camera's own mechanics -- tighter gate radii and
+    // roughness at the smaller gauges; mech >= 0.5 keeps its imprint quads.
+    if (cine) {
+        for (double& r : L.gate_r) r *= cine->mech;
+        L.rough_amp *= cine->mech;
+        if (cine->mech < 0.5) L.quads.clear();
+        for (auto& side : L.wob_a) for (double& a : side) a *= cine->mech;
+    }
     L.holes_light = o.holes == "white";
     L.carrier_open = o.carrier == "open";
     L.carrier_none = o.carrier == "none";
@@ -628,6 +693,33 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
         // (perf_phase -3.2) and the name starts 6 mm in. Drawn within +-0.7 mm
         // of that, not across the whole pitch; the advance error stays the frame's.
         L.perf_phase = std::clamp(-3.3 + rc.uni(-0.7, 0.7) + rf.normal() * 0.08, -4.1, -2.6);
+    }
+
+    // API-SPEC §24 (SpektraLab 2.4.1): a cine gauge's own perforations,
+    // sprocket-locked: the camera's pins hold the frame on them, so the frame
+    // line falls midway between two holes (an even count a frame), the hole is
+    // centred on the frame (Super 8) or on the frame line (16 mm, `at_line`).
+    // The neighbours are the same picture one advance before and after.
+    // Streams of their own, after every draw above: nothing else moves.
+    if (cine) {
+        L.cine = true;
+        L.holes = true;
+        L.perforated = false;             // the 135-style grid is not used
+        L.perf_pitch = cine->pitch; L.perf_w = cine->hole_along; L.perf_h = cine->hole_across;
+        L.perf_edge = cine->hole_edge; L.perf_r = cine->hole_r;
+        L.perf_shape = cine->shape; L.perf_rows = cine->rows;
+        L.perf_rmin = cine->r_min; L.perf_rmax = cine->r_max; L.perf_jit = cine->jit;
+        Rng rk(stream(cam, kCamera, 29)), rn(stream(frm ^ (cam << 32), kFrame, 30));
+        const double reg = rk.uni(-cine->reg, cine->reg), jitter = rn.normal() * cine->adv_err;
+        const double centre = L.gate_s0 + 0.5 * L.gate_along;
+        const bool line = cine->at_line || cine->perfs % 2 == 0;
+        L.perf_phase = centre - 0.5 * cine->hole_along + (line ? 0.5 * cine->pitch : 0.0) + reg + jitter;
+        const double adv = cine->perfs * cine->pitch;
+        L.nb_prev = adv + rn.normal() * cine->adv_err;
+        L.nb_next = adv + rn.normal() * cine->adv_err;
+        if (cine->single_frame) { L.nb_prev = 0.0; L.nb_next = 0.0; }
+    } else {
+        L.holes = L.perforated;
     }
 
     // --- canvas ------------------------------------------------------------
@@ -650,6 +742,16 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
     } else {
         margin_along = 0.9 + rf.uni(-0.1, 0.1);
         t_lo = L.gate_t0 - 1.1; t_hi = L.gate_t0 + L.gate_across + 1.1;
+    }
+    if (cine) {
+        // API-SPEC §24: the frame and a sliver of each neighbour, at the gauge's
+        // named aspect (Super 8 3:2, 16 mm 16:9); a single-frame gauge shows one
+        // frame's advance, the frame line split between its two ends.
+        const bool long_across = fmt->across > fmt->along;
+        const double canvas_along = cine->single_frame ? cine->perfs * cine->pitch
+                                  : long_across ? L.film_w * cine->aspect_short / cine->aspect_long
+                                                : L.film_w * cine->aspect_long / cine->aspect_short;
+        margin_along = std::max(0.0, 0.5 * (canvas_along - L.gate_along));
     }
     if (full_width) {
         // 只输出曝光的 69.5×35 画幅：两端不补片间黑，横跨正好到片基边缘。
@@ -678,7 +780,7 @@ bool Pipeline::overscan_layout(uint32_t frame_w, uint32_t frame_h, std::string& 
     // 未曝光的楔形，所以这一档两者都关掉（与 FrameMatter 同口径）。
     if (full_width) L.scan_rot = 0.0;
     const double random_ds = rf.normal() * 0.08, random_dt = rf.normal() * 0.06;
-    const double ds = full_width ? 0.0 : random_ds, dt = full_width ? 0.0 : random_dt;
+    const double ds = full_width ? 0.0 : random_ds * cine_small, dt = full_width ? 0.0 : random_dt * cine_small;
     const double cu = 0.5 * L.canvas_w * L.px, cv = 0.5 * L.canvas_h * L.px;
     const double c = std::cos(L.scan_rot), sn = std::sin(L.scan_rot);
     // canvas (u, v) -> film (s, t): the scan rotation R, then for a vertical film
@@ -839,7 +941,7 @@ void Pipeline::overscan_params_block(std::vector<float>& P) const {
         P[b] = float(L.leaks[k].s); P[b + 1] = float(L.leaks[k].side); P[b + 2] = float(L.leaks[k].amp);
         P[b + 3] = float(L.leaks[k].sig_s); P[b + 4] = float(L.leaks[k].sig_t);
     }
-    P[P_PERFORATED] = L.perforated ? 1.0f : 0.0f;
+    P[P_PERFORATED] = L.holes ? 1.0f : 0.0f;   // the holes, a 135 layout's or a cine gauge's (API-SPEC §24)
     P[P_PERF_PITCH] = float(L.perf_pitch); P[P_PERF_W] = float(L.perf_w); P[P_PERF_H] = float(L.perf_h);
     P[P_PERF_EDGE] = float(L.perf_edge); P[P_PERF_R] = float(L.perf_r); P[P_PERF_PHASE] = float(L.perf_phase);
     for (int c = 0; c < 3; ++c) P[P_HOLE_C + c] = float(L.hole_cmy[c]);
@@ -863,6 +965,11 @@ void Pipeline::overscan_params_block(std::vector<float>& P) const {
     P[P_WALL_PAR] = float(L.wall_parallax);
     for (int c = 0; c < 3; ++c) P[P_BASE_R + c] = float(L.base_rgb[c]);
     P[P_WALL_GLOW] = float(L.wall_glow); P[P_WALL_SCATTER] = float(L.wall_scatter);
+    // API-SPEC §24: cine gauges. All 0 on every still format.
+    P[P_PERF_SHAPE] = float(L.perf_shape); P[P_PERF_ROWS] = float(L.perf_rows);
+    P[P_PERF_RMIN] = float(L.perf_rmin); P[P_PERF_RMAX] = float(L.perf_rmax); P[P_PERF_JIT] = float(L.perf_jit);
+    P[P_NB_PREV] = float(L.nb_prev); P[P_NB_NEXT] = float(L.nb_next);
+    P[P_HOLES] = L.holes ? 1.0f : 0.0f;
 }
 
 // ---------------------------------------------------------------------------

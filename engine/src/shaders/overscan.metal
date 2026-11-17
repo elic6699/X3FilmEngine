@@ -35,7 +35,16 @@ enum : uint {
     // FrameMatter (GPL-3.0-or-later, Copyright 2026 LittleSixNine):
     // 135 全宽曝光的内部布局标志；只有 135_full_67 为 1，不新增公开参数。
     P_FULL_WIDTH = 261,
-    P_COUNT = 262
+    // API-SPEC §24 (SpektraLab 2.4.1) cine gauges: appended after every slot
+    // above, so nothing moves; each is 0 on every still format and every reader
+    // keeps today's arithmetic at 0 (bit-for-bit zero regression).
+    P_PERF_SHAPE = 262,    // 0 KS rounded rect; 1 Bell & Howell
+    P_PERF_ROWS,           // 0 both edges; 1 t-low only (Super 8); 2 t-high only (16 mm)
+    P_PERF_RMIN, P_PERF_RMAX,   // hole corner-radius clamp (0: 0.3 / 0.6 mm, KS)
+    P_PERF_JIT,            // punch tolerance scale (0: x 1)
+    P_NB_PREV, P_NB_NEXT,  // > 0: the frame before / after, this far along (same picture)
+    P_HOLES,               // 1: the film has perforations (135 layout OR a cine gauge)
+    P_COUNT = 270
 };
 constant uint kQStride = 10u;
 
@@ -168,12 +177,23 @@ kernel void spk_overscan_canvas(device const float* frame [[buffer(0)]],
         float2 sg = st;
         float shift = 0.0f;
         if (P[P_PAIR_ADV] > 0.0f && st.x > P[P_GS0] + 0.5f * (P[P_GW] + P[P_PAIR_ADV])) { shift = P[P_PAIR_ADV]; sg.x -= shift; }
+        // API-SPEC §24: a cine film's neighbours, the same picture one advance
+        // before and after, past half an advance from the gate's centre.
+        const bool nb = P[P_NB_NEXT] > 0.0f;
+        if (nb) {
+            const float mid = P[P_GS0] + 0.5f * P[P_GW];
+            if (st.x > mid + 0.5f * P[P_NB_NEXT])      { shift = P[P_NB_NEXT]; sg.x -= shift; }
+            else if (st.x < mid - 0.5f * P[P_NB_PREV]) { shift = -P[P_NB_PREV]; sg.x -= shift; }
+        }
         const float cov = penumbra(exposure_gate_sdf(sg, P), P[P_PENUMBRA]);
+        // A cine neighbour is the same picture again: sample it at its place in
+        // its own gate. A pair's input holds both pictures, so sample at st.
+        const float s_at = nb ? sg.x : st.x;
         if (cov > 0.0f) {
             const float px = P[P_PX];
             float fx, fy;
-            if (P[P_VERTICAL] < 0.5f) { fx = (st.x - P[P_GS0]) / px - 0.5f; fy = (st.y - P[P_GT0]) / px - 0.5f; }
-            else                      { fx = (P[P_GT0] + P[P_GH] - st.y) / px - 0.5f; fy = (st.x - P[P_GS0]) / px - 0.5f; }
+            if (P[P_VERTICAL] < 0.5f) { fx = (s_at - P[P_GS0]) / px - 0.5f; fy = (st.y - P[P_GT0]) / px - 0.5f; }
+            else                      { fx = (P[P_GT0] + P[P_GH] - st.y) / px - 0.5f; fy = (s_at - P[P_GS0]) / px - 0.5f; }
             e += cov * sample_frame(frame, fx, fy, uint(P[P_FW]), uint(P[P_FH]));
         }
         // Gate flare: the gate's bevelled edge reflects scene light onto the
@@ -248,17 +268,36 @@ static float perf_sdf(float2 st, device const float* P, thread uint& hole) {
     // cut where the other three sides were soft.)
     const float k = floor((st.x - ph - 0.5f * P[P_PERF_W]) / pitch + 0.5f);
     const bool top = st.y < 0.5f * W;
+    // API-SPEC §24: one row only -- t-low (Super 8) or t-high (16 mm). At 0 the
+    // still formats fall through and draw both, exactly as before.
+    if ((P[P_PERF_ROWS] > 0.5f && P[P_PERF_ROWS] < 1.5f && !top) ||
+        (P[P_PERF_ROWS] > 1.5f && top)) {
+        hole = 0u;
+        return 1.0e3f;
+    }
     const uint seed = uint(P[P_PERF_SEED]);
+    // the punch's tolerances and the corner clamp: KS's (x 1, 0.3-0.6 mm) at 0.
+    const float jit = P[P_PERF_JIT] > 0.0f ? P[P_PERF_JIT] : 1.0f;
+    const float rmin = P[P_PERF_RMIN] > 0.0f ? P[P_PERF_RMIN] : 0.3f;
+    const float rmax = P[P_PERF_RMAX] > 0.0f ? P[P_PERF_RMAX] : 0.6f;
     hole = hash_u(uint(int(k) * 2 + (top ? 0 : 1)) * 0x9E3779B9u ^ seed);
     const float j0 = hash_f(int(hole & 0xFFFFu), seed ^ 0x1u) - 0.5f, j1 = hash_f(int(hole & 0xFFFFu), seed ^ 0x2u) - 0.5f;
     const float j2 = hash_f(int(hole & 0xFFFFu), seed ^ 0x3u) - 0.5f, j3 = hash_f(int(hole & 0xFFFFu), seed ^ 0x4u) - 0.5f;
     const float j4 = hash_f(int(hole & 0xFFFFu), seed ^ 0x5u) - 0.5f;
-    const float wa = P[P_PERF_W] + 0.016f * j2, hc = P[P_PERF_H] + 0.016f * j3;
-    const float r = clamp(P[P_PERF_R] + 0.08f * j4, 0.3f, 0.6f);
-    const float sc = ph + k * pitch + 0.5f * P[P_PERF_W] + 0.020f * j0;
-    const float tc = (top ? P[P_PERF_EDGE] + 0.5f * P[P_PERF_H] : W - P[P_PERF_EDGE] - 0.5f * P[P_PERF_H]) + 0.024f * j1;
-    const float2 q = fabs(float2(st.x - sc, st.y - tc)) - float2(0.5f * wa - r, 0.5f * hc - r);
-    float d = length(max(q, 0.0f)) + min(max(q.x, q.y), 0.0f) - r;
+    const float wa = P[P_PERF_W] + 0.016f * jit * j2, hc = P[P_PERF_H] + 0.016f * jit * j3;
+    const float r = clamp(P[P_PERF_R] + 0.08f * jit * j4, rmin, rmax);
+    const float sc = ph + k * pitch + 0.5f * P[P_PERF_W] + 0.020f * jit * j0;
+    const float tc = (top ? P[P_PERF_EDGE] + 0.5f * P[P_PERF_H] : W - P[P_PERF_EDGE] - 0.5f * P[P_PERF_H]) + 0.024f * jit * j1;
+    float d;
+    if (P[P_PERF_SHAPE] > 0.5f) {
+        // Bell & Howell (§24): a disc the hole's width across, cut flat to its
+        // height, corners eased by r (the shape eroded by r, then grown back).
+        const float2 pd = float2(st.x - sc, st.y - tc);
+        d = max(length(pd) - (0.5f * hc - r), fabs(pd.x) - (0.5f * wa - r)) - r;
+    } else {
+        const float2 q = fabs(float2(st.x - sc, st.y - tc)) - float2(0.5f * wa - r, 0.5f * hc - r);
+        d = length(max(q, 0.0f)) + min(max(q.x, q.y), 0.0f) - r;
+    }
     // the punched edge: each hole's own roughness, 1-4 microns
     const float rough = 0.001f + 0.003f * hash_f(int(hole & 0xFFFFu), seed ^ 0x6u);
     d += rough * (value_noise(st.x / 0.05f, seed ^ 0x77u) + value_noise(st.y / 0.05f, seed ^ 0x99u) - 1.0f) * 2.0f;

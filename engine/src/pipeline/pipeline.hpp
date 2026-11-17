@@ -297,6 +297,19 @@ struct OverscanLayout {
     double base_rgb[3] = {1, 1, 1};       // the base's transmittance colour, linear output RGB
     double wall_glow = 0;                 // black holes: the wall's rim brightness
     double wall_scatter = 0.02;           // light scattered in the base widens the wall, mm
+    // API-SPEC §24 (SpektraLab 2.4.1) cine gauges: Super 8, 16 mm, 35 mm
+    // 4-perf, 65 mm 5- and 15-perf. All zero / false on every still format, so
+    // the existing layouts render bit-for-bit as before. `holes` separates
+    // "a 135-style layout" from "the film has perforations at all"; kernels
+    // read `holes`. `cine` marks a gauge whose holes and neighbours follow its
+    // own SMPTE table; `perf_shape` 0 = KS, 1 = Bell & Howell; `perf_rows`
+    // 0 = both edges, 1 = t-low only, 2 = t-high only.
+    bool holes = false;
+    bool cine = false;
+    int perf_shape = 0, perf_rows = 0;
+    double perf_rmin = 0, perf_rmax = 0, perf_jit = 0;
+    double perf_dt = 0;                   // both rows shifted across (slitter), mm
+    double nb_prev = 0, nb_next = 0;      // neighbour frames: same picture, this far along (0 = none)
 };
 
 class Pipeline {
