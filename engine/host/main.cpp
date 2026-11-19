@@ -611,13 +611,19 @@ Json m_open(const Request& q) {
 // vector<uint8_t> staging copy.
 Json m_decode_raw_frame(const Request& q, std::shared_ptr<std::vector<float>>& frame) {
     const fs::path path = utf8_path(require_string(q.params, "path"));
-    const DecodeOptions options = decode_options(q.params.at("decode"));
+    DecodeOptions options = decode_options(q.params.at("decode"));
     // feature/generic-raw (S3): a caller that only needs a preview can ask for a
     // frame that is already downscaled. Doing the resize here — before the pipe —
     // avoids shipping a 100 MP float frame to the app just to discard most of it.
     // This is a TOP-LEVEL param on purpose: decode_options() rejects unknown
     // keys inside `decode` by design.
     const uint32_t long_edge = uint32_t(std::max(0, q.params.at("long_edge").as_int(0)));
+    // X-Trans (Fujifilm) demosaic is CPU-bound and single-threaded in LibRaw:
+    // 26 MP takes ~11 s at passes=3. A preview only needs a small frame, so use
+    // the deterministic fast pass count there (2x faster). Full-resolution
+    // exports (long_edge == 0) keep the original quality. This field only
+    // reaches LibRaw's X-Trans branch; Bayer/headroom/mono are untouched.
+    if (long_edge > 0) options.xtrans_quality = 2;
     Decoded d = decode_frame(path, options);
     if (d.probe.kind != FileKind::Raw)
         throw HostError{"unsupported", "decode_raw_frame: only camera RAW files are supported"};

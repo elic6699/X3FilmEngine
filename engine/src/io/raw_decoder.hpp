@@ -81,8 +81,11 @@ bool decode_raw_compatible(const std::filesystem::path& source,
 // The same policy with caller-chosen white-balance multipliers (R, G, B, G2;
 // LibRaw's user_mul) in place of the as-shot ones. nullptr is the overload
 // above. Used by spektralab-host for Temperature/Tint at decode.
+// xtrans_quality (1..3) lowers LibRaw's X-Trans demosaic pass count for the
+// preview path only; 3 is the original quality and the default. Bayer paths
+// and every colour/WB/quantisation stage are unaffected.
 bool decode_raw_compatible(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
-                           DecodedRaw& out, std::string& error);
+                           DecodedRaw& out, std::string& error, int xtrans_quality = 3);
 
 // Monochrome sensor bypass (X3Lumina 2026-11-13): no demosaic, no white
 // balance and no colour matrix. Reads the unpacked single-channel sensor

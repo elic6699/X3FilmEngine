@@ -809,7 +809,8 @@ bool decode_linear_prophoto(const fs::path& path, const DecodeOptions& options, 
                             : options.raw_mode == "mono"
                                 ? spk::io::decode_raw_monochrome(path, decoded, error)
                                 : spk::io::decode_raw_compatible(
-                                      path, custom_wb ? &mul : nullptr, decoded, error);
+                                      path, custom_wb ? &mul : nullptr, decoded, error,
+                                      options.xtrans_quality);
         if (!ok) return false;
         out.width = decoded.width;
         out.height = decoded.height;

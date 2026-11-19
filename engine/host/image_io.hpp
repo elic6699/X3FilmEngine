@@ -61,6 +61,10 @@ struct DecodeOptions {
     std::string raw_mode = "compatible16";   // or "headroom" / "mono"
     // R2: a custom white balance at decode (RAW, compatible16 only).
     std::optional<double> temperature_k, tint;
+    // X-Trans demosaic quality (LibRaw user_qual, 1..3). A preview request
+    // (long_edge > 0) uses the fast deterministic pass count; a full-resolution
+    // export keeps the original 3-pass quality. Bayer paths are unaffected.
+    int xtrans_quality = 3;
 };
 // Thrown as a plain error string prefixed "unsupported:" when a decode option
 // cannot be honoured for this file.

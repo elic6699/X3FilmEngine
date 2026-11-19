@@ -213,7 +213,7 @@ bool decode_raw_compatible(const std::filesystem::path& source,
 }
 
 bool decode_raw_compatible(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
-                           DecodedRaw& out, std::string& error) {
+                           DecodedRaw& out, std::string& error, int xtrans_quality) {
     error.clear();
     const auto total_start = Clock::now();
     try {
@@ -256,6 +256,16 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
         }
         if (!capture_source_metadata(*raw, decoded.metadata, error)) return false;
         if (const char* name = raw->unpack_function_name()) decoded.metadata.decoder_name = name;
+
+        // X-Trans (Fujifilm) demosaic is CPU-bound and single-threaded in
+        // LibRaw: 26 MP costs ~11 s at passes=3. For preview requests
+        // (xtrans_quality < 3) use the deterministic fast pass count. The
+        // check is gated on the sensor layout, so Bayer / headroom / mono and
+        // every export (quality==3) keep byte-identical behaviour.
+        if (xtrans_quality < 3 &&
+            raw->imgdata.idata.filters == LIBRAW_XTRANS) {
+            raw->imgdata.params.user_qual = xtrans_quality;
+        }
 
         start = Clock::now();
         const int process_status = raw->dcraw_process();
